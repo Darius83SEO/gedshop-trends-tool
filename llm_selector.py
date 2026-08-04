@@ -28,6 +28,9 @@ class SourceChoice:
     via: str                  # 'llm' | 'euristica'
     confidence: str = "media"     # 'alta' | 'media' | 'bassa'
     needs_review: bool = False    # True => va validato da un umano
+    alt_mid: str | None = None    # miglior Topic alternativo (per il confronto)
+    alt_title: str | None = None
+    alt_type: str | None = None
 
 
 def _client():
@@ -37,7 +40,7 @@ def _client():
 
 
 def _build_prompt(query_term, category_name, candidates):
-    lines = [f"[0] Search term \"{query_term}\" (ricerca letterale: include TUTTI i "
+    lines = [f"[0] Query di ricerca \"{query_term}\" (ricerca letterale: include TUTTI i "
              f"significati della parola)"]
     for i, c in enumerate(candidates, start=1):
         lines.append(f"[{i}] Topic \"{c.title}\" — tipo: {c.type}")
@@ -49,15 +52,39 @@ def _build_prompt(query_term, category_name, candidates):
         f"Devi scegliere UNA sorgente Google Trends che rappresenti la domanda di "
         f"ricerca per QUESTO PRODOTTO FISICO. Scarta i significati fuori tema "
         f"(es. una parola che indica anche un cibo, un'azienda, un film, un concetto "
-        f"astratto). Preferisci un Topic pertinente (piu' preciso e pulito); se "
-        f"nessun Topic corrisponde davvero al prodotto, scegli il Search term [0].\n\n"
+        f"astratto). Scarta SEMPRE i singoli prodotti di marca e le linee di prodotto "
+        f"(es. \"Levi's Felpa ... - Blu\"): servono concetti generici di categoria. "
+        f"Preferisci un Topic pertinente (piu' preciso e pulito); se nessun Topic "
+        f"corrisponde davvero al prodotto, scegli la Query di ricerca [0].\n\n"
         f"Opzioni:\n{opts}\n\n"
         f"Indica anche la tua CONFIDENZA nella scelta: \"alta\" se una sola opzione "
         f"e' chiaramente giusta; \"media\" se plausibile ma con qualche dubbio; "
         f"\"bassa\" se la parola e' ambigua o nessuna opzione e' davvero pertinente.\n"
-        f"Rispondi SOLO in JSON: {{\"choice\": <numero>, \"confidence\": "
-        f"\"alta|media|bassa\", \"reason\": \"<breve motivazione in italiano, max 25 parole>\"}}"
+        f"Indica infine \"alt\": il numero del Topic piu' plausibile DIVERSO da quello "
+        f"scelto, da mostrare come confronto a chi valida (0 se nessun altro Topic ha "
+        f"senso per questo prodotto).\n"
+        f"Rispondi SOLO in JSON: {{\"choice\": <numero>, \"choice_title\": \"<il titolo "
+        f"ESATTO dell'opzione scelta, copiato carattere per carattere>\", \"alt\": <numero>, "
+        f"\"confidence\": \"alta|media|bassa\", "
+        f"\"reason\": \"<breve motivazione in italiano, max 25 parole>\"}}"
     )
+
+
+def _resolve_choice(idx: int, title: str, candidates: list) -> int:
+    """Indice del candidato scelto (0 = query di ricerca), coerente col titolo.
+
+    Il numero e il titolo restituiti dall'LLM possono divergere (capitato con
+    'felpe': motivazione su «Sweatshirts & Hoodies» ma indice del prodotto Levi's).
+    Il titolo e' il segnale piu' affidabile: se corrisponde a un candidato, vince lui.
+    """
+    t = (title or "").strip().lower()
+    if t:
+        for i, c in enumerate(candidates, start=1):
+            if (c.title or "").strip().lower() == t:
+                return i
+        if t.startswith("query di ricerca") or t.strip('"') == "":
+            return 0
+    return idx
 
 
 def choose_source(query_term: str, category_name: str,
@@ -85,11 +112,17 @@ def choose_source(query_term: str, category_name: str,
             response_format={"type": "json_object"},
         )
         data = json.loads(resp.choices[0].message.content)
-        idx = int(data.get("choice", 0))
+        idx = _resolve_choice(int(data.get("choice", 0)),
+                              str(data.get("choice_title", "")), candidates)
         reason = str(data.get("reason", "")).strip()
         confidence = str(data.get("confidence", "media")).strip().lower()
         if confidence not in ("alta", "media", "bassa"):
             confidence = "media"
+        try:
+            alt_i = int(data.get("alt", 0))
+        except (TypeError, ValueError):
+            alt_i = 0
+        alt = candidates[alt_i - 1] if 0 < alt_i <= len(candidates) and alt_i != idx else None
     except Exception as e:
         fb = _heuristic(query_term, candidates)
         fb.reason = f"LLM non disponibile ({e}); {fb.reason}"
@@ -100,14 +133,37 @@ def choose_source(query_term: str, category_name: str,
     entity_first = bool(candidates) and candidates[0].kind == "entity"
     needs_review = confidence != "alta" or entity_first
 
+    def _alt_fields(exclude_mid=None):
+        a = alt if (alt and alt.mid != exclude_mid) else None
+        return {"alt_mid": a.mid if a else None, "alt_title": a.title if a else None,
+                "alt_type": a.type if a else None}
+
     if idx <= 0 or idx > len(candidates):
         return SourceChoice(mode="term", mid=None, title=None, type=None,
-                            reason=reason or f"Search term «{query_term}»: nessun Topic pertinente.",
-                            via="llm", confidence=confidence, needs_review=needs_review)
+                            reason=reason or f"Query di ricerca «{query_term}»: nessun Topic pertinente.",
+                            via="llm", confidence=confidence, needs_review=needs_review,
+                            **_alt_fields())
     c = candidates[idx - 1]
+
+    # rete di sicurezza: un'entita' specifica (linea di prodotti, marca, film...)
+    # non e' mai la categoria merceologica. Se esiste un concetto generico, usa quello.
+    if c.kind == "entity":
+        sub = next((x for x in candidates if x.kind != "entity"), None)
+        if sub is not None:
+            reason = (f"{reason} (corretto: «{c.title}» [{c.type}] e' un prodotto "
+                      f"specifico, uso il concetto «{sub.title}»)").strip()
+            c, needs_review = sub, True
+        else:
+            return SourceChoice(mode="term", mid=None, title=None, type=None,
+                                reason=(f"{reason} (i Topic disponibili sono entita' "
+                                        f"specifiche: uso la query di ricerca)").strip(),
+                                via="llm", confidence=confidence, needs_review=True,
+                                **_alt_fields())
+
     return SourceChoice(mode="topic", mid=c.mid, title=c.title, type=c.type,
                         reason=reason or f"Topic «{c.title}» [{c.type}].", via="llm",
-                        confidence=confidence, needs_review=needs_review)
+                        confidence=confidence, needs_review=needs_review,
+                        **_alt_fields(exclude_mid=c.mid))
 
 
 def _heuristic(query_term, candidates) -> SourceChoice:

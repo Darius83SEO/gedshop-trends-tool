@@ -98,6 +98,13 @@
   .opt .ometa { font-size: .8rem; color: var(--muted); margin-top: 6px; display: flex; gap: 12px; flex-wrap: wrap; } .opt .ometa b { color: var(--text); }
   .cands { margin-top: 12px; font-size: .82rem; color: var(--muted); }
   .cands b { color: var(--text); }
+  .gtlink { font-size: .8rem; color: var(--primary-dark); text-decoration: none; font-weight: 600; white-space: nowrap; }
+  .gtlink:hover { text-decoration: underline; }
+  .scalenote { font-size: .76rem; color: var(--muted); margin: 9px 0 0; }
+  .explain { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 18px; margin-bottom: 16px; font-size: .87rem; color: var(--muted); }
+  .explain h4 { margin: 0 0 7px; font-size: .84rem; color: var(--text); }
+  .explain p { margin: 0 0 8px; } .explain p:last-child { margin-bottom: 0; }
+  .explain b { color: var(--text); }
 
   .tbl-wrap { overflow-x: auto; } table { width: 100%; border-collapse: collapse; font-size: .9rem; }
   th, td { text-align: left; padding: 12px 13px; border-bottom: 1px solid var(--border); white-space: nowrap; }
@@ -130,7 +137,7 @@
   </div>
 
   <section class="panel active" id="tab-cat">
-    <div class="toolbar"><select class="picker" id="catSel"></select><div class="seg" id="segSource"></div></div>
+    <div class="toolbar"><select class="picker" id="catSel"></select><div class="seg" id="segSource"></div><div class="seg" id="segRange"></div></div>
     <div id="catDetail"></div>
   </section>
   <section class="panel" id="tab-cal">
@@ -139,6 +146,13 @@
   </section>
   <section class="panel" id="tab-conf">
     <p class="lead">Per ogni categoria l'AI (gpt-4.1) sceglie la sorgente Google Trends più allineata al prodotto. Qui vedi il perché; l'override permanente si fa dalla sidebar.</p>
+    <div class="explain">
+      <h4>⚠ Che cosa si valida (e cosa no)</h4>
+      <p>La validazione <b>non</b> riguarda i numeri: i dati di Google Trends sono quelli e non si toccano. Riguarda <b>quale curva stiamo guardando</b>.</p>
+      <p>Google Trends misura una parola in due modi: la <b>Query di ricerca</b> (letterale — include tutti i significati: «penne» comprende anche la pasta) e il <b>Topic</b> (il concetto, che raccoglie sinonimi, plurali e altre lingue: il concetto «Penna» esclude la pasta). L'AI sceglie da sola quale delle due rappresenta il prodotto di Gedshop.</p>
+      <p>Una scheda viene marcata <span class="review-flag">⚠ da validare</span> quando la scelta non è ovvia: parola ambigua, oppure Google associa quella parola prima a un'entità (una marca, un film, un'azienda). <b>Validare = confermare che il concetto scelto è davvero il prodotto</b>, guardando le due curve a confronto e le query correlate.</p>
+      <p>La conferma non ricalcola nulla: decide solo quale delle due viste già scaricate alimenta badge, calendario editoriale e consiglio di pubblicazione. È reversibile in qualsiasi momento da «Cambia sorgente».</p>
+    </div>
     <div id="confList"></div>
   </section>
   <section class="panel" id="tab-list">
@@ -155,9 +169,40 @@ const MESI = ["gennaio","febbraio","marzo","aprile","maggio","giugno","luglio","
 const ABBR = ["Gen","Feb","Mar","Apr","Mag","Giu","Lug","Ago","Set","Ott","Nov","Dic"];
 const cap = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 const DATA = __DATA__;
+const GEO = "__GEO__" || "IT";
 const cats = Object.entries(DATA).map(([name, v]) => ({ name, ...v }));
 const chosen = {}; cats.forEach(c => chosen[c.name] = c.active_mode);
 function activeView(name) { const c = DATA[name]; return (chosen[name] === 'topic' && c.topic) ? c.topic : c.term; }
+
+/* --- finestra temporale: taglia la serie 5 anni già scaricata (nessuna nuova chiamata) --- */
+const RANGES = [
+  { k: '3m', lab: '3 mesi', months: 3, gt: 'today 3-m' },
+  { k: '12m', lab: '12 mesi', months: 12, gt: 'today 12-m' },
+  { k: '5y', lab: '5 anni', months: 60, gt: 'today 5-y' },
+];
+let range = '5y';
+const rangeDef = () => RANGES.find(r => r.k === range) || RANGES[2];
+function windowed(series) {
+  if (!series || !series.length || range === '5y') return series;
+  const last = new Date(series[series.length - 1][0]);
+  const from = new Date(last); from.setMonth(from.getMonth() - rangeDef().months);
+  const cut = series.filter(p => new Date(p[0]) >= from);
+  return cut.length >= 2 ? cut : series.slice(-2);
+}
+/* Link alla stessa interrogazione su Google Trends (stessa sorgente, geo e finestra). */
+function gtUrl(name) {
+  const c = DATA[name], isTopic = chosen[name] === 'topic' && c.topic && c.topic.mid;
+  const q = isTopic ? c.topic.mid : c.query_term;
+  const geo = c.geo || GEO;
+  return 'https://trends.google.it/trends/explore?date=' + encodeURIComponent(rangeDef().gt)
+    + '&geo=' + encodeURIComponent(geo) + '&q=' + encodeURIComponent(q) + '&hl=it';
+}
+function gtUrlFor(c, mode) {
+  const q = mode === 'topic' ? (c.topic && c.topic.mid) : c.query_term;
+  if (!q) return '';
+  return 'https://trends.google.it/trends/explore?date=today%205-y&geo='
+    + encodeURIComponent(c.geo || GEO) + '&q=' + encodeURIComponent(q) + '&hl=it';
+}
 
 document.querySelectorAll('.tab').forEach(btn => btn.addEventListener('click', () => {
   document.querySelectorAll('.tab').forEach(b => b.setAttribute('aria-selected', b === btn));
@@ -172,10 +217,19 @@ function lineChart(series) {
   let peakI = 0; series.forEach((p, i) => { if (p[1] > series[peakI][1]) peakI = i; });
   let grid = ''; [0, 25, 50, 75, 100].forEach(v => { const y = yS(v);
     grid += `<line class="gridline" x1="${m.l}" y1="${y}" x2="${W - m.r}" y2="${y}"/><text class="ylabel" x="${m.l - 7}" y="${y + 4}" text-anchor="end">${v}</text>`; });
-  let years = '', prevY = null;
-  series.forEach((p, i) => { const y = p[0].slice(0, 4); if (y !== prevY) { const x = xS(i);
-    if (prevY !== null) years += `<line class="yearsep" x1="${x}" y1="${m.t}" x2="${x}" y2="${m.t + ih}"/>`;
-    years += `<text class="xlabel" x="${x}" y="${H - 7}" text-anchor="middle">${y}</text>`; prevY = y; } });
+  // finestre lunghe -> tacche per anno; finestre corte -> tacche per mese
+  const spanM = (new Date(series[n - 1][0]) - new Date(series[0][0])) / 2629800000;
+  let years = '', prevK = null;
+  series.forEach((p, i) => {
+    const d = new Date(p[0]);
+    const k = spanM > 18 ? p[0].slice(0, 4) : d.getFullYear() + '-' + d.getMonth();
+    if (k === prevK) return;
+    const x = xS(i);
+    const lab = spanM > 18 ? p[0].slice(0, 4)
+      : ABBR[d.getMonth()] + (d.getMonth() === 0 || prevK === null ? " '" + String(d.getFullYear()).slice(2) : '');
+    if (prevK !== null) years += `<line class="yearsep" x1="${x}" y1="${m.t}" x2="${x}" y2="${m.t + ih}"/>`;
+    years += `<text class="xlabel" x="${x}" y="${H - 7}" text-anchor="middle">${lab}</text>`; prevK = k;
+  });
   let line = ''; series.forEach((p, i) => { line += (i ? 'L' : 'M') + xS(i).toFixed(1) + ',' + yS(p[1]).toFixed(1) + ' '; });
   const area = `M${xS(0)},${yS(0)} ` + series.map((p, i) => `L${xS(i).toFixed(1)},${yS(p[1]).toFixed(1)}`).join(' ') + ` L${xS(n - 1)},${yS(0)} Z`;
   return { svg: `<svg viewBox="0 0 ${W} ${H}" role="img">
@@ -186,6 +240,7 @@ function lineChart(series) {
     <rect class="hit" x="${m.l}" y="${m.t}" width="${iw}" height="${ih}"/></svg>`, W, xS, yS, series };
 }
 const fmtDate = iso => { const d = new Date(iso); return d.getDate() + ' ' + ABBR[d.getMonth()].toLowerCase() + ' ' + d.getFullYear(); };
+const fmtMY = iso => { const d = new Date(iso); return ABBR[d.getMonth()].toLowerCase() + ' ' + d.getFullYear(); };
 function attachHover(wrap, chart) {
   const svg = wrap.querySelector('svg'), hit = wrap.querySelector('.hit');
   const fline = wrap.querySelector('.focus-line'), fdot = wrap.querySelector('.focus-dot'), tip = wrap.querySelector('.tip');
@@ -216,16 +271,20 @@ cats.forEach(c => { const o = document.createElement('option'); o.value = c.name
 sel.addEventListener('change', () => renderCat(sel.value));
 function renderSeg(name) {
   const c = DATA[name], seg = document.getElementById('segSource');
-  seg.innerHTML = `<button data-m="term" aria-pressed="${chosen[name] === 'term'}">🔤 Search term</button>
+  seg.innerHTML = `<button data-m="term" aria-pressed="${chosen[name] === 'term'}">🔤 Query di ricerca</button>
                    <button data-m="topic" aria-pressed="${chosen[name] === 'topic'}" ${c.topic ? '' : 'disabled'}>🎯 Topic${c.topic ? '' : ' n/d'}</button>`;
   seg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { if (b.disabled) return; chosen[name] = b.dataset.m; renderCat(name); }));
+  const rg = document.getElementById('segRange');
+  rg.innerHTML = RANGES.map(r => `<button data-r="${r.k}" aria-pressed="${range === r.k}">${r.lab}</button>`).join('');
+  rg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { range = b.dataset.r; renderCat(name); }));
 }
 function renderCat(name) {
   const c = DATA[name]; renderSeg(name);
   const v = activeView(name); if (!v) { document.getElementById('catDetail').innerHTML = '<div class="empty">Nessun dato.</div>'; return; }
   const isTopic = chosen[name] === 'topic' && c.topic;
-  const srcTxt = isTopic ? `Sorgente: <b>Topic</b> «${c.topic.title}» [${c.topic.ttype}]` : `Sorgente: <b>Search term</b> «${c.query_term}»`;
-  const chart = lineChart(v.series);
+  const srcTxt = isTopic ? `Sorgente: <b>Topic</b> «${c.topic.title}» [${c.topic.ttype}]` : `Sorgente: <b>Query di ricerca</b> «${c.query_term}»`;
+  const win = windowed(v.series);
+  const chart = lineChart(win);
   const maxP = Math.max(...v.profile);
   const bars = v.profile.map((val, i) => { const mth = i + 1; let cls = '';
     if (v.seasonal) { if (mth === v.peak) cls = 'peak'; else if (mth === v.rise) cls = 'rise'; else if (mth === v.pub) cls = 'pub'; }
@@ -236,14 +295,16 @@ function renderCat(name) {
     : `<span class="badge b-flat">Poco stagionale</span>`;
   const legend = v.seasonal ? `<div class="legend"><span><i style="background:var(--primary)"></i>inizio salita</span><span><i style="background:#066aab"></i>picco</span><span><i style="background:var(--publish)"></i>pubblicazione</span></div>` : '';
   document.getElementById('catDetail').innerHTML = `
-    <div class="cat-head"><h2>${name}</h2><span class="ai-chip">sorgente scelta da AI</span><span class="chip">forza ${(v.strength * 100).toFixed(0)}%</span><span class="chip">${v.n || 263} settimane · 5 anni</span></div>
-    <div class="source-note">${srcTxt}${c.needs_review ? ' <span class="review-flag">⚠ da validare</span>' : ''} · <span style="color:var(--ai)">${c.note || ''}</span></div>
+    <div class="cat-head"><h2>${name}</h2><span class="ai-chip">sorgente scelta da AI</span><span class="chip">forza ${(v.strength * 100).toFixed(0)}%</span><span class="chip">${v.n || v.series.length} rilevazioni · ${fmtMY(v.series[0][0])} → ${fmtMY(v.series[v.series.length - 1][0])}</span></div>
+    <div class="source-note">${srcTxt}${c.needs_review ? ' <span class="review-flag">⚠ da validare</span>' : ''} · <span style="color:var(--ai)">${c.note || ''}</span>
+      <div style="margin-top:7px"><a class="gtlink" href="${gtUrl(name)}" target="_blank" rel="noopener">↗ Apri questa curva su Google Trends</a></div></div>
     <div class="badges">${badges}</div>
     <div class="advice">${v.advice}</div>
-    <div class="card"><p class="subttl">Interesse nel tempo · 5 anni <span style="color:var(--publish);text-transform:none;letter-spacing:0">● picco</span></p>
-      <div class="chart-wrap" id="cw"><div class="tip"></div>${chart.svg}</div></div>
+    <div class="card"><p class="subttl">Interesse nel tempo · ${rangeDef().lab} <span style="text-transform:none;letter-spacing:0;font-weight:400">(${fmtDate(win[0][0])} → ${fmtDate(win[win.length - 1][0])})</span> <span style="color:var(--publish);text-transform:none;letter-spacing:0">● massimo del periodo</span></p>
+      <div class="chart-wrap" id="cw"><div class="tip"></div>${chart.svg}</div>
+      ${range === '5y' ? '' : `<p class="scalenote">Zoom sugli ultimi ${rangeDef().lab} dello stesso export. La scala <b>resta quella dei 5 anni</b> (100 = massimo storico): così vedi se il periodo è alto o basso rispetto allo storico, invece di una curva riscalata come farebbe Google Trends.</p>`}</div>
     <div class="grid2">
-      <div class="card"><p class="subttl">Profilo stagionale medio</p><div class="bars">${bars}</div><div class="blabels">${blabels}</div>${legend}</div>
+      <div class="card"><p class="subttl">Profilo stagionale medio · sempre su 5 anni</p><div class="bars">${bars}</div><div class="blabels">${blabels}</div>${legend}</div>
       <div class="card"><p class="subttl">Query</p>
         <div class="qcols">
           <div><div class="qh top">PRINCIPALI</div><div class="queries">${qlist(v.top)}</div></div>
@@ -264,17 +325,19 @@ function renderConf() {
     const mini = (mode, v, meta) => {
       if (!v) return `<div class="opt dim"><span class="otitle">${meta.title}</span><div class="okind">nessun dato Trends</div></div>`;
       const seas = v.seasonal ? `picco <b>${ABBR[v.peak - 1]}</b> · pubblica <b>${ABBR[v.pub - 1]}</b>` : `<b>poco stagionale</b>`;
+      const link = gtUrlFor(c, mode);
       return `<div class="opt ${chosen[c.name] === mode ? 'sel' : 'dim'}"><span class="otitle">${meta.title}</span> <span class="okind">${meta.kind}</span>
         <div style="margin-top:8px">${sparkline(v.series, 150, 34)}</div>
-        <div class="ometa"><span>${seas}</span><span>forza <b>${(v.strength * 100).toFixed(0)}%</b></span></div></div>`;
+        <div class="ometa"><span>${seas}</span><span>forza <b>${(v.strength * 100).toFixed(0)}%</b></span></div>
+        ${link ? `<div style="margin-top:7px"><a class="gtlink" href="${link}" target="_blank" rel="noopener">↗ verifica su Google Trends</a></div>` : ''}</div>`;
     };
     const revChip = rev ? `<span class="src-chip src-review">⚠ da validare · conf. ${c.confidence || 'bassa'}</span>` : '';
     return `<div class="conf-card ${rev ? 'rev' : ''}"><div class="conf-head"><h3>${c.name}</h3>
-      <span class="src-chip ${isTopic ? 'src-topic' : 'src-term'}">${isTopic ? 'Topic' : 'Search term'}</span>${revChip}
+      <span class="src-chip ${isTopic ? 'src-topic' : 'src-term'}">${isTopic ? 'Topic' : 'Query di ricerca'}</span>${revChip}
       <span style="margin-left:auto;color:var(--muted);font-size:.82rem">via ${c.via || 'llm'}</span></div>
       <div class="conf-body"><div class="postilla"><span class="lab">🧭 gpt-4.1</span>${c.note || ''}${rev ? ' <span class="review-flag">— conferma o correggi dalla sidebar.</span>' : ''}</div>
         <div class="compare">
-          ${mini('term', c.term, { title: 'Search term «' + c.query_term + '»', kind: '🔤 letterale' })}
+          ${mini('term', c.term, { title: 'Query di ricerca «' + c.query_term + '»', kind: '🔤 letterale' })}
           ${mini('topic', c.topic, { title: c.topic ? 'Topic «' + c.topic.title + '»' : 'Topic non pertinente', kind: c.topic ? '🎯 ' + c.topic.ttype : '' })}
         </div>
         ${cands.length ? `<div class="cands">Candidati Google Trends: ${cands.map(x => `<b>${x.title}</b> [${x.type}]`).join(' · ')}</div>` : ''}

@@ -80,6 +80,13 @@ with st.sidebar:
     review = [c for c in done if (c.get("payload") or {}).get("needs_review")]
 
     with st.expander(f"⚠️ Da validare ({len(review)})", expanded=bool(review)):
+        st.caption(
+            "**Cosa validi:** non i numeri (Google Trends è quello), ma **quale curva** "
+            "stiamo guardando. Ogni parola si può misurare come *query di ricerca* "
+            "(letterale, tutti i significati: «penne» include la pasta) o come *Topic* "
+            "(il concetto, sinonimi e lingue incluse). Qui finiscono solo i casi ambigui: "
+            "confermi che il concetto scelto è davvero il prodotto. Non ricalcola nulla, "
+            "decide solo quale vista alimenta badge, calendario e consigli. Reversibile.")
         if not review:
             st.caption("Nessuna sorgente ambigua da validare. 👍")
         for cat in review:
@@ -106,7 +113,7 @@ with st.sidebar:
             selc = st.selectbox("Categoria", list(names.keys()))
             cat = names[selc]; rec = cat["payload"]; has_topic = bool(rec.get("topic"))
             opts = ["term"] + (["topic"] if has_topic else [])
-            lbl = {"term": f"🔤 Search term «{rec['query_term']}»",
+            lbl = {"term": f"🔤 Query di ricerca «{rec['query_term']}»",
                    "topic": f"🎯 Topic «{rec['topic']['title']}»" if has_topic else "🎯 Topic non disponibile"}
             cur = rec.get("active_mode", "term")
             new = st.radio("Sorgente attiva", opts, index=opts.index(cur) if cur in opts else 0,
@@ -123,5 +130,6 @@ data = build_data()
 if not data:
     st.info("Nessun dato disponibile. Contatta l'amministratore per l'analisi iniziale.")
 else:
-    html = DASHBOARD.replace("__DATA__", json.dumps(data, ensure_ascii=False))
+    html = (DASHBOARD.replace("__DATA__", json.dumps(data, ensure_ascii=False))
+                     .replace("__GEO__", GEO))
     components.html(html, height=1500, scrolling=True)

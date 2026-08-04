@@ -18,10 +18,15 @@ import resolver
 import seasonality as S
 
 
+# sotto questa soglia la serie 5 anni e' troppo bucata per una stagionalita'
+# affidabile (5 anni settimanali = ~263 punti; certi Topic ne restituiscono 2-3)
+MIN_SERIES_POINTS = 40
+
+
 def _view(provider, source_kw: str, geo: str) -> dict | None:
-    """Costruisce una vista completa per una sorgente (search term o mid topic)."""
+    """Costruisce una vista completa per una sorgente (query di ricerca o mid topic)."""
     s = provider.fetch_series(source_kw, geo, config.YEARS_HISTORY)
-    if not s.ok:
+    if not s.ok or len(s.points) < MIN_SERIES_POINTS:
         return None
     r = S.analyze(s.points, config.PUBLISH_LEAD_MONTHS)
 
@@ -46,33 +51,45 @@ def _view(provider, source_kw: str, geo: str) -> dict | None:
 
 def analyze_category(provider, name: str, query_term: str, geo: str = "IT") -> dict:
     try:
-        cands = resolver.autocomplete(query_term)
+        cands = resolver.autocomplete(query_term)[:6]
     except Exception:
         cands = []
 
     choice = llm_selector.choose_source(query_term, name, cands)
 
     term = _view(provider, query_term, geo)
-    topic = None
-    if choice.mode == "topic" and choice.mid:
-        topic = _view(provider, choice.mid, geo)
-        if topic:
-            topic.update(mid=choice.mid, title=choice.title, ttype=choice.type)
 
+    # quale Topic scaricare: quello scelto, oppure - se la scelta e' dubbia e va
+    # validata da un umano - il miglior concetto disponibile, cosi' il validatore
+    # ha le due curve a confronto invece di un solo lato.
+    want_alt = choice.mode != "topic" and choice.needs_review and choice.alt_mid
+    mid = choice.mid if choice.mode == "topic" else (choice.alt_mid if want_alt else None)
+    t_title = choice.title if choice.mode == "topic" else (choice.alt_title if want_alt else None)
+    t_type = choice.type if choice.mode == "topic" else (choice.alt_type if want_alt else None)
+
+    topic = _view(provider, mid, geo) if mid else None
     if topic:
+        topic.update(mid=mid, title=t_title, ttype=t_type)
+
+    if topic and choice.mode == "topic":
         active = "topic"
         note = choice.reason
     else:
         active = "term"
-        note = choice.reason if choice.mode == "term" else \
-            f"(Topic «{choice.title}» senza dati Trends → uso il search term) {choice.reason}"
+        if choice.mode == "topic":
+            note = (f"(Topic «{choice.title}» senza dati Trends sufficienti → uso la "
+                    f"query di ricerca) {choice.reason}")
+        elif topic:
+            note = f"{choice.reason} Topic «{t_title}» scaricato per il confronto."
+        else:
+            note = choice.reason
 
     return {
-        "query_term": query_term, "via": choice.via, "note": note, "active_mode": active,
-        "portable_cross_market": active == "topic",
+        "query_term": query_term, "geo": geo, "via": choice.via, "note": note,
+        "active_mode": active, "portable_cross_market": active == "topic",
         "confidence": choice.confidence, "needs_review": choice.needs_review,
         "candidates": [{"mid": c.mid, "title": c.title, "type": c.type, "kind": c.kind}
-                       for c in cands[:5]],
+                       for c in cands],
         "term": term, "topic": topic,
     }
 

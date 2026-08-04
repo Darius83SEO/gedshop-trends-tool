@@ -11,7 +11,10 @@ Modificabile a mano nel tool se un termine risulta poco significativo.
 SITE_URL = "gedshop.it"
 
 GEDSHOP_CATEGORIES = [
-    {"name": "Agende e Calendari",      "query_term": "agende",              "url": "https://www.gedshop.it/gadget-agende-calendari"},
+    # Agende e Calendari stanno sulla stessa pagina di categoria ma hanno
+    # stagionalita' diverse: due chiamate Trends distinte, due schede separate.
+    {"name": "Agende",                  "query_term": "agende",              "url": "https://www.gedshop.it/gadget-agende-calendari"},
+    {"name": "Calendari",               "query_term": "calendari",           "url": "https://www.gedshop.it/gadget-agende-calendari"},
     {"name": "Abbigliamento Sportivo",  "query_term": "abbigliamento sportivo", "url": "https://www.gedshop.it/abbigliamento-sportivo"},
     {"name": "Abbigliamento da Lavoro", "query_term": "abbigliamento da lavoro", "url": "https://www.gedshop.it/abbigliamento-da-lavoro"},
     {"name": "Magliette",               "query_term": "magliette",           "url": "https://www.gedshop.it/magliette-personalizzate"},

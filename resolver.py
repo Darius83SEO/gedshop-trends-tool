@@ -115,7 +115,7 @@ def decide(query: str, candidates: list[TopicCandidate]) -> Decision:
     """
     if not candidates:
         return Decision(mode="term", state="auto", confidence="alta", candidates=candidates,
-                        note=f"Nessun Topic trovato per «{query}»: uso il termine di ricerca.")
+                        note=f"Nessun Topic trovato per «{query}»: uso la query di ricerca.")
 
     first = candidates[0]
     best = next((c for c in candidates if c.kind != "entity"), None)
@@ -125,7 +125,7 @@ def decide(query: str, candidates: list[TopicCandidate]) -> Decision:
         return Decision(
             mode="term", state="auto", confidence="alta", topic=None, candidates=candidates,
             note=(f"Nessun Topic pertinente: i candidati sono entita' specifiche "
-                  f"({_fmt_cands(candidates)}). Uso il termine di ricerca «{query}»."))
+                  f"({_fmt_cands(candidates)}). Uso la query di ricerca «{query}»."))
 
     entity_first = first.kind == "entity"
     is_top = best is first
@@ -146,7 +146,7 @@ def decide(query: str, candidates: list[TopicCandidate]) -> Decision:
             mode="term", state="review", confidence="bassa", topic=best,
             candidates=candidates, portable_cross_market=False,
             note=(f"Stringa ambigua: Google associa «{query}» prima a «{first.title}» "
-                  f"[{first.type}] (un'entita'). Ho lasciato attivo il search term; il "
+                  f"[{first.type}] (un'entita'). Ho lasciato attiva la query di ricerca; il "
                   f"Topic piu' vicino e' «{best.title}» [{best.type}]. Da confermare. "
                   f"Candidati: {_fmt_cands(candidates)}."))
 
@@ -164,5 +164,5 @@ def resolve(query: str, hl: str = "it") -> Decision:
         cands = autocomplete(query, hl=hl)
     except Exception as e:
         return Decision(mode="term", confidence="alta", candidates=[],
-                        note=f"Risoluzione Topic non riuscita ({e}): uso il search term.")
+                        note=f"Risoluzione Topic non riuscita ({e}): uso la query di ricerca.")
     return decide(query, cands)

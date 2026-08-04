@@ -111,6 +111,13 @@ with st.sidebar:
     done_all = [c for c in storage.list_categories(site_url, geo) if c.get("last_sync")]
     review = [c for c in done_all if (c.get("payload") or {}).get("needs_review")]
     with st.expander(f"⚠️ Da validare ({len(review)})", expanded=bool(review)):
+        st.caption(
+            "**Cosa validi:** non i numeri (Google Trends è quello), ma **quale curva** "
+            "stiamo guardando. Ogni parola si può misurare come *query di ricerca* "
+            "(letterale, tutti i significati: «penne» include la pasta) o come *Topic* "
+            "(il concetto, sinonimi e lingue incluse). Qui finiscono solo i casi ambigui: "
+            "confermi che il concetto scelto è davvero il prodotto. Non ricalcola nulla, "
+            "decide solo quale vista alimenta badge, calendario e consigli. Reversibile.")
         if not review:
             st.caption("Nessuna sorgente ambigua da validare. 👍")
         for cat in review:
@@ -165,5 +172,6 @@ with st.sidebar:
 
 # ------------------------------------------------------------------ main
 data = build_data(site_url, geo)
-html = DASHBOARD.replace("__DATA__", json.dumps(data, ensure_ascii=False))
+html = (DASHBOARD.replace("__DATA__", json.dumps(data, ensure_ascii=False))
+                 .replace("__GEO__", geo))
 components.html(html, height=1500, scrolling=True)
