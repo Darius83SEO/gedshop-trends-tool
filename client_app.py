@@ -19,10 +19,18 @@ import config
 import seasonality as S  # noqa: F401  (month names usati indirettamente lato UI)
 from storage import get_storage
 
-st.set_page_config(page_title="Gedshop Trends", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Gedshop Trends", page_icon="📈", layout="wide",
+                   initial_sidebar_state="expanded")
+# Nota: NON nascondere header e toolbar. Il pulsante che riapre la sidebar
+# chiusa (stExpandSidebarButton) e' figlio di stToolbar dentro stHeader:
+# nascondendo il contenitore la colonna sinistra sparisce e non si recupera
+# piu'. Nascondiamo solo hamburger e bottone Deploy.
 st.markdown("""
 <style>
-#MainMenu, footer, header {visibility: hidden;}
+footer {visibility: hidden;}
+[data-testid="stMainMenu"], [data-testid="stAppDeployButton"] {display: none !important;}
+[data-testid="stHeader"] {background: transparent;}
+[data-testid="stExpandSidebarButton"] {display: inline-flex !important; visibility: visible !important;}
 .block-container {padding-top: 1.2rem; padding-bottom: 0; max-width: 1250px;}
 section[data-testid="stSidebar"] {border-right: 1px solid #263849;}
 </style>
@@ -32,7 +40,14 @@ section[data-testid="stSidebar"] {border-right: 1px solid #263849;}
 SITE_URL = config._get("CLIENT_SITE", "gedshop.it")
 GEO = config.DEFAULT_GEO
 DASHBOARD = (Path(__file__).parent / "dashboard.html").read_text(encoding="utf-8")
-storage = get_storage()
+
+try:
+    storage = get_storage()
+except Exception as e:  # DB irraggiungibile: messaggio chiaro, non schermata di errore
+    st.error("Non riesco a collegarmi al database dei trend. Riprova tra un minuto; "
+             "se il problema resta, avvisa l'amministratore.")
+    st.caption(f"Dettaglio tecnico: {type(e).__name__}: {e}")
+    st.stop()
 
 
 def check_password() -> bool:
@@ -130,6 +145,11 @@ data = build_data()
 if not data:
     st.info("Nessun dato disponibile. Contatta l'amministratore per l'analisi iniziale.")
 else:
-    html = (DASHBOARD.replace("__DATA__", json.dumps(data, ensure_ascii=False))
-                     .replace("__GEO__", GEO))
+    # __AI__: nella vista cliente resta generico. La chiave LLM qui non c'e'
+    # (l'analisi gira sulla app admin), quindi il nome del modello non sarebbe
+    # quello che ha davvero scelto le sorgenti gia' salvate.
+    # __DATA__ per ultimo: i segnaposto non vanno cercati dentro il JSON.
+    html = (DASHBOARD.replace("__GEO__", GEO)
+                     .replace("__AI__", "AI")
+                     .replace("__DATA__", json.dumps(data, ensure_ascii=False)))
     components.html(html, height=1500, scrolling=True)

@@ -163,10 +163,11 @@
     <div class="nowbox" id="calNow"></div>
     <div class="explain">
       <h4>📖 Come si legge questo calendario</h4>
-      <p>Ogni riga è un <b>mese dell'anno</b>, da gennaio a dicembre. Dentro ci sono le categorie di prodotto per cui conviene <b>pubblicare o aggiornare le pagine proprio in quel mese</b>.</p>
-      <p><b>Perché in anticipo e non quando la gente cerca?</b> Una pagina nuova o rifatta non si posiziona su Google il giorno dopo: servono settimane. Se pubblichi quando la domanda è già al massimo, arrivi a festa finita. Quindi partiamo dal mese in cui le ricerche toccano il <b>picco</b>, torniamo indietro al mese in cui <b>iniziano a salire</b> e togliamo ancora un mese di margine. Quel mese è il momento giusto per pubblicare.</p>
-      <p><b>Cosa si pubblica.</b> La pagina di categoria del prodotto e i contenuti che la sostengono: guida all'acquisto, articolo del blog, landing per le campagne. Spesso non serve scrivere da zero: basta aggiornare e ampliare quello che c'è già.</p>
-      <p><b>In che ordine.</b> Dentro ogni mese le categorie sono ordinate dalla più stagionale alla meno. La percentuale di <b>forza</b> dice quanto è marcata la differenza tra alta e bassa stagione: più è alta, più conta arrivare puntuali su quella categoria.</p>
+      <p>Ogni riga è un <b>mese dell'anno</b>, da gennaio a dicembre. Dentro ci sono le categorie di prodotto su cui conviene <b>lavorare in quel mese</b>.</p>
+      <p><b>Cosa si fa.</b> Due attività, ed è per programmarle che serve questo calendario: l'<b>articolo di blog</b> legato alla categoria — nuovo, oppure aggiornato e ampliato se ne esiste già uno — e la <b>link building</b> verso quella pagina (guest post, digital PR, segnalazioni da altri siti).</p>
+      <p><b>Perché in anticipo e non quando la gente cerca?</b> Perché sono proprio le due attività che hanno bisogno di tempo per dare effetto. Un articolo non si posiziona il giorno dopo: va indicizzato e deve maturare posizioni, e servono settimane. I link cominciano a spostare i risultati nelle settimane successive a quando vengono messi online. Se parti quando la domanda è già al massimo, li paghi adesso e ne vedi l'effetto a stagione finita.</p>
+      <p><b>Come si ricava il mese.</b> Partiamo dal mese in cui le ricerche toccano il <b>picco</b>, torniamo indietro al mese in cui <b>iniziano a salire</b> e togliamo ancora un mese di margine. Quello è il mese in cui pubblicare l'articolo e far partire i link.</p>
+      <p><b>In che ordine.</b> Dentro ogni mese le categorie sono ordinate dalla più stagionale alla meno. La percentuale di <b>forza</b> dice quanto è marcata la differenza tra alta e bassa stagione: sulle prime della lista conviene concentrare l'articolo migliore e il budget di link building, perché sono quelle in cui arrivare puntuali cambia di più il risultato.</p>
     </div>
     <div class="cal" id="calGrid"></div><p class="note" id="flatNote"></p>
   </section>
@@ -397,7 +398,7 @@ function renderCal() {
   if (now.length) {
     box.innerHTML = `<div class="nb-lab">📌 oggi è il ${oggi}</div>
       <div class="nb-title">Suggeriamo di intervenire su ${elenco(now.map(x => x.name))}.</div>
-      <div class="nb-sub">Sono le categorie il cui mese di pubblicazione è <b>${cap(MESI[nowM - 1])}</b>: pubblica o aggiorna adesso queste pagine, così saranno già posizionate quando le ricerche cominceranno a salire. Partendo dalla prima, che è la più stagionale.</div>
+      <div class="nb-sub">Sono le categorie il cui mese di lavorazione è <b>${cap(MESI[nowM - 1])}</b>: pubblica adesso l'articolo di blog e fai partire la link building verso quelle pagine, così saranno già posizionate quando le ricerche cominceranno a salire. Comincia dalla prima, che è la più stagionale.</div>
       <ol>${now.map(x => `<li><b>${x.name}</b> — ricerche in salita da ${MESI[x.v.rise - 1]}, picco ${aMese(x.v.peak)}.</li>`).join('')}</ol>`;
   } else {
     let next = null;
@@ -415,7 +416,7 @@ function renderCal() {
     const el = document.createElement('div');
     el.className = 'month' + (m === nowM ? ' now' : '') + (list.length ? '' : ' void');
     const testa = `<header><span class="m">${cap(MESI[m - 1])}${m === nowM ? ' <span class="nowpill">siamo qui</span>' : ''}</span>
-      <span class="c">${list.length ? list.length + ' categori' + (list.length > 1 ? 'e' : 'a') + ' da pubblicare' : 'niente in programma'}</span></header>`;
+      <span class="c">${list.length ? list.length + ' categori' + (list.length > 1 ? 'e' : 'a') + ' su cui lavorare' : 'niente in programma'}</span></header>`;
     el.innerHTML = testa + (list.length ? `<ul>${list.map(x => `<li>
         <span class="cname">${x.name}</span>
         <span class="why">ricerche in salita da <b>${MESI[x.v.rise - 1]}</b>, picco ${aMese(x.v.peak)}</span>
@@ -425,7 +426,7 @@ function renderCal() {
 
   const flat = views.filter(x => !x.v.seasonal).map(x => x.name);
   document.getElementById('flatNote').innerHTML = flat.length
-    ? `⚪ <b>Fuori calendario</b> — queste categorie non hanno una vera stagione: l'interesse resta più o meno uguale tutto l'anno, quindi puoi pubblicarle quando vuoi, riempiendo i mesi vuoti. Sono: <b>${flat.join(', ')}</b>.`
+    ? `⚪ <b>Fuori calendario</b> — queste categorie non hanno una vera stagione: l'interesse resta più o meno uguale tutto l'anno, quindi articoli e link building si possono fare quando vuoi, usandole per riempire i mesi vuoti. Sono: <b>${flat.join(', ')}</b>.`
     : '';
 }
 function renderList() {
