@@ -1,9 +1,12 @@
-streamlit>=1.36
-plotly>=5.22
-pandas>=2.2
+# Dipendenze minime: i grafici sono SVG scritti a mano (niente plotly/pandas).
+# openai/google-genai/anthropic servono solo alla app admin per la scelta della
+# sorgente: basta il pacchetto del provider che usi davvero.
+streamlit>=1.36,<2
 requests>=2.32
 beautifulsoup4>=4.12
 lxml>=5.2
 psycopg2-binary>=2.9
 python-dateutil>=2.9
 openai>=1.30
+google-genai>=1.0
+anthropic>=1.0

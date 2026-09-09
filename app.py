@@ -7,6 +7,7 @@ preset, analizza, override sorgente). Grafici e stile identici all'anteprima.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import streamlit as st
@@ -19,10 +20,19 @@ from crawler import crawl_categories
 from providers.dataforseo import DataForSEOProvider
 from storage import get_storage
 
-st.set_page_config(page_title="Gedshop Trends", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Gedshop Trends", page_icon="📈", layout="wide",
+                   initial_sidebar_state="expanded")
+# Nota: NON nascondere header e toolbar. Il pulsante che riapre la sidebar
+# chiusa (stExpandSidebarButton) e' figlio di stToolbar dentro stHeader:
+# nascondendo il contenitore la colonna sinistra sparisce e non si recupera
+# piu'. Nascondiamo quindi solo i due elementi che davvero non servono, il
+# menu hamburger e il bottone Deploy, lasciando la freccia di riapertura.
 st.markdown("""
 <style>
-#MainMenu, footer, header {visibility: hidden;}
+footer {visibility: hidden;}
+[data-testid="stMainMenu"], [data-testid="stAppDeployButton"] {display: none !important;}
+[data-testid="stHeader"] {background: transparent;}
+[data-testid="stExpandSidebarButton"] {display: inline-flex !important; visibility: visible !important;}
 .block-container {padding-top: 1.2rem; padding-bottom: 0; max-width: 1250px;}
 section[data-testid="stSidebar"] {border-right: 1px solid #263849;}
 </style>
@@ -46,22 +56,203 @@ def build_data(site_url, geo) -> dict:
     return out
 
 
+# ------------------------------------------------------- sincronizzazione
+SYNC_EVERY_DAYS = 30
+
+
+def flash(msg: str, kind: str = "success"):
+    """Messaggio che sopravvive al rerun (altrimenti st.success sparisce)."""
+    st.session_state["_flash"] = (kind, msg)
+
+
+def run_analysis(targets, geo, label="Analisi…") -> list[str]:
+    """Scarica da DataForSEO e salva. Ritorna la lista dei problemi."""
+    if not targets:
+        return []
+    prov = provider()
+    prog = st.progress(0.0, label)
+    errs = []
+    for i, cat in enumerate(targets):
+        try:
+            rec = analysis.analyze_category(prov, cat["name"], cat["query_term"], geo)
+            if rec.get("term") or rec.get("topic"):
+                storage.save_record(cat["id"], rec)
+            else:
+                errs.append(cat["name"])
+        except Exception as e:
+            errs.append(f"{cat['name']}: {e}")
+        prog.progress((i + 1) / len(targets), f"{cat['name']} ({i + 1}/{len(targets)})")
+    prog.empty()
+    return errs
+
+
+def _as_dt(value):
+    """last_sync: datetime da Postgres, stringa ISO da JSON."""
+    if not value:
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def sync_state(cats) -> dict:
+    """Freschezza del dataset: ultimo aggiornamento, quante mancano, se e' scaduto."""
+    stamps = [d for d in (_as_dt(c.get("last_sync")) for c in cats) if d]
+    last = max(stamps) if stamps else None
+    oldest = min(stamps) if stamps else None
+    days = (datetime.now(timezone.utc) - oldest).days if oldest else None
+    return {"last": last, "oldest": oldest, "days": days,
+            "done": len(stamps), "missing": len(cats) - len(stamps),
+            "stale": bool(days is not None and days >= SYNC_EVERY_DAYS)}
+
+
 # ------------------------------------------------------------------ sidebar
 with st.sidebar:
     st.markdown("### 📈 Gedshop Trends")
     st.caption("Quando partono le ricerche → quando pubblicare")
+
+    _fl = st.session_state.pop("_flash", None)
+    if _fl:
+        {"success": st.success, "warning": st.warning,
+         "error": st.error, "info": st.info}[_fl[0]](_fl[1])
+
     geo = st.selectbox("Mercato", GEOS,
                        index=GEOS.index(config.DEFAULT_GEO) if config.DEFAULT_GEO in GEOS else 0)
     site_url = st.text_input("Sito", value="gedshop.it")
 
     st.divider()
+
+    # --- scelta del modello AI ---
+    _providers = list(config.LLM_PROVIDERS.keys())
+
+    def _llm_option(key: str) -> str:
+        c = config.LLM_PROVIDERS[key]
+        return f"{'🟢' if c['key'] else '⚪'} {c['label']} · {c['model']}"
+
+    with st.popover(f"🤖 AI: {config.llm_conf()['label']}", use_container_width=True,
+                    help="Quale LLM legge i candidati di Google Trends e sceglie la "
+                         "sorgente (Topic o query di ricerca) per ogni categoria. "
+                         "Vale dalla prossima analisi: le categorie già analizzate "
+                         "restano come sono finché non le rianalizzi."):
+        st.radio("Modello", _providers, key="llm_provider",
+                 index=_providers.index(config.DEFAULT_LLM_PROVIDER),
+                 format_func=_llm_option)
+        _cur = config.llm_conf()
+        if _cur["key"]:
+            st.caption(f"Attivo: **{config.llm_label()}**")
+        else:
+            st.warning(f"Manca `{_cur['secret']}` nei secrets: senza key si usano "
+                       f"le regole euristiche.")
+            st.caption(f"Richiede anche `pip install {_cur['pkg']}`.")
+
     st.caption(
         ("🟢 " if config.has_provider_creds() else "🔴 ") + "DataForSEO   "
-        + ("🟢 " if config.has_llm() else "🟡 ") + f"AI {config.OPENAI_MODEL if config.has_llm() else '(regole)'}   "
+        + ("🟢 " if config.has_llm() else "🟡 ") + f"AI {config.llm_label() if config.has_llm() else '(regole)'}   "
         + ("🟢 Neon" if storage.kind == "postgres" else "💾 JSON"))
 
     st.divider()
+
+    # ---------------------------------------------- dati DataForSEO (in evidenza)
+    cats = storage.list_categories(site_url, geo)
+    pending = [c for c in cats if not c.get("last_sync")]
+    sync = sync_state(cats)
+    no_creds = not config.has_provider_creds()
+
+    st.markdown("#### 🔄 Dati Google Trends")
+    if not cats:
+        st.caption("Nessuna categoria: caricale con **Preset** o **Crawl** qui sotto.")
+    elif sync["last"]:
+        st.caption(f"Ultimo aggiornamento: **{sync['last'].astimezone().strftime('%d/%m/%Y')}** · "
+                   f"{sync['done']} categorie aggiornate"
+                   + (f" · {sync['missing']} mai analizzate" if sync["missing"] else ""))
+    else:
+        st.caption(f"{len(cats)} categorie caricate, **nessuna ancora analizzata**.")
+
+    if no_creds:
+        st.error("Credenziali DataForSEO mancanti nei secrets: la sincronizzazione è disattivata.")
+    elif sync["stale"]:
+        st.warning(f"Dati vecchi di {sync['days']} giorni: conviene aggiornare "
+                   f"volumi e stagionalità.", icon="⏰")
+
+    s1, s2 = st.columns(2)
+    run_all = s1.button("⬇️ Aggiorna tutto", use_container_width=True,
+                        type="primary", disabled=no_creds or not cats,
+                        help="Riscarica da DataForSEO tutte le categorie di questo mercato "
+                             "e ricalcola stagionalità e calendario editoriale.")
+    run_new = s2.button(f"⬇️ Mancanti ({len(pending)})", use_container_width=True,
+                        disabled=no_creds or not pending,
+                        help="Scarica solo le categorie mai analizzate. Consuma meno crediti.")
+    target = cats if run_all else (pending if run_new else None)
+    if target:
+        errs = run_analysis(target, geo, "Aggiornamento da DataForSEO…")
+        if errs:
+            flash("Aggiornate con problemi su: " + ", ".join(errs), "warning")
+        else:
+            flash(f"{len(target)} categorie aggiornate.")
+        st.rerun()
+
+    auto = str(storage.get_setting("auto_sync_monthly", "0")) == "1"
+    new_auto = st.toggle(
+        "Aggiornamento automatico mensile", value=auto, disabled=no_creds,
+        help=f"Quando i dati superano i {SYNC_EVERY_DAYS} giorni, il primo che apre "
+             f"il tool fa ripartire da solo l'aggiornamento di tutte le categorie. "
+             f"Serve che qualcuno apra la dashboard: per un aggiornamento davvero "
+             f"automatico anche a tool chiuso usa sync_monthly.py con un cron.")
+    if new_auto != auto:
+        storage.set_setting("auto_sync_monthly", "1" if new_auto else "0")
+        st.rerun()
+
+    if (new_auto and cats and sync["stale"] and not no_creds
+            and not st.session_state.get("_auto_sync_done")):
+        st.session_state["_auto_sync_done"] = True
+        errs = run_analysis(cats, geo, "Aggiornamento mensile automatico…")
+        flash(f"Aggiornamento mensile automatico eseguito su {len(cats)} categorie."
+              + (" Problemi su: " + ", ".join(errs) if errs else ""),
+              "warning" if errs else "success")
+        st.rerun()
+
+    st.divider()
+
+    # ---------------------------------------------- nuova categoria + sync mirata
+    with st.expander("➕ Aggiungi categoria", expanded=False):
+        st.caption("Appena salvata parte la sincronizzazione con DataForSEO **solo per "
+                   "questa categoria**; badge, tabella e calendario editoriale si "
+                   "aggiornano da soli.")
+        with st.form("add_cat", clear_on_submit=True):
+            nc_name = st.text_input("Nome categoria", placeholder="es. Borracce termiche")
+            nc_term = st.text_input("Parola da cercare su Google Trends",
+                                    placeholder="vuoto = usa il nome della categoria")
+            nc_url = st.text_input("URL della categoria (facoltativo)",
+                                   placeholder="https://www.gedshop.it/…")
+            add = st.form_submit_button("➕ Aggiungi e sincronizza",
+                                        use_container_width=True, type="primary",
+                                        disabled=no_creds)
+        if add:
+            name = (nc_name or "").strip()
+            term = (nc_term or "").strip() or name
+            if not name:
+                st.error("Serve almeno il nome della categoria.")
+            elif any(c["name"].strip().lower() == name.lower() for c in cats):
+                st.error(f"«{name}» esiste già su {site_url} ({geo}).")
+            else:
+                cid = storage.upsert_category(site_url, name, term, geo,
+                                              url=(nc_url or "").strip() or None)
+                errs = run_analysis([{"id": cid, "name": name, "query_term": term}],
+                                    geo, f"Sincronizzo «{name}»…")
+                if errs:
+                    flash(f"«{name}» aggiunta, ma Google Trends non ha dati "
+                          f"sufficienti per «{term}». Prova un termine più generico.",
+                          "warning")
+                else:
+                    flash(f"«{name}» aggiunta e sincronizzata: calendario aggiornato.")
+                st.rerun()
+
     with st.expander("⚙️ Amministrazione", expanded=False):
+        st.caption(f"Categorie su {site_url} ({geo}): **{len(cats)}** · "
+                   f"da analizzare: **{len(pending)}**")
         a1, a2 = st.columns(2)
         if a1.button("🔍 Crawl", use_container_width=True):
             try:
@@ -73,7 +264,8 @@ with st.sidebar:
             from gedshop_seed import GEDSHOP_CATEGORIES, SITE_URL
             for c in GEDSHOP_CATEGORIES:
                 storage.upsert_category(SITE_URL, c["name"], c["query_term"], geo, url=c.get("url"))
-            st.success(f"Caricate {len(GEDSHOP_CATEGORIES)} categorie."); st.rerun()
+            flash(f"Caricate {len(GEDSHOP_CATEGORIES)} categorie: ora usa «Aggiorna tutto».")
+            st.rerun()
 
         cands = st.session_state.get("cands", [])
         if cands:
@@ -83,29 +275,9 @@ with st.sidebar:
                 for c in cands:
                     if c["name"] in picked:
                         storage.upsert_category(site_url, c["name"], c["name"], geo, url=c.get("url"))
-                st.session_state.pop("cands", None); st.success("Salvate."); st.rerun()
-
-        cats = storage.list_categories(site_url, geo)
-        pending = [c for c in cats if not c.get("last_sync")]
-        st.write(f"Categorie: **{len(cats)}** · da analizzare: **{len(pending)}**")
-        b1, b2 = st.columns(2)
-        run_all = b1.button("⬇️ Analizza tutto", use_container_width=True, disabled=not config.has_provider_creds())
-        run_new = b2.button("⬇️ Mancanti", use_container_width=True, disabled=not config.has_provider_creds())
-        target = cats if run_all else (pending if run_new else None)
-        if target:
-            prov = provider(); prog = st.progress(0.0, "Analisi…"); errs = []
-            for i, cat in enumerate(target):
-                try:
-                    rec = analysis.analyze_category(prov, cat["name"], cat["query_term"], geo)
-                    if rec.get("term") or rec.get("topic"):
-                        storage.save_record(cat["id"], rec)
-                    else:
-                        errs.append(cat["name"])
-                except Exception as e:
-                    errs.append(f"{cat['name']}: {e}")
-                prog.progress((i + 1) / len(target), f"{cat['name']} ({i+1}/{len(target)})")
-            if errs: st.warning("Problemi: " + ", ".join(errs))
-            st.success("Analisi completata."); st.rerun()
+                st.session_state.pop("cands", None)
+                flash(f"Salvate {len(picked)} categorie: ora usa «Mancanti».")
+                st.rerun()
 
     # --- validatore umano (solo casi ambigui) ---
     done_all = [c for c in storage.list_categories(site_url, geo) if c.get("last_sync")]
@@ -172,6 +344,8 @@ with st.sidebar:
 
 # ------------------------------------------------------------------ main
 data = build_data(site_url, geo)
-html = (DASHBOARD.replace("__DATA__", json.dumps(data, ensure_ascii=False))
-                 .replace("__GEO__", geo))
+# __DATA__ per ultimo: cosi' i segnaposto non vengono cercati dentro il JSON
+html = (DASHBOARD.replace("__GEO__", geo)
+                 .replace("__AI__", config.llm_label() if config.has_llm() else "regole euristiche")
+                 .replace("__DATA__", json.dumps(data, ensure_ascii=False)))
 components.html(html, height=1500, scrolling=True)

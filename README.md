@@ -33,6 +33,50 @@ streamlit run app.py
   effimero) serve Neon per la persistenza. Database consigliato: `gedshop_trends`
   (dedicato, tabelle con prefisso `gt_`).
 
+### Modello AI
+
+La scelta della sorgente Trends (Topic vs query di ricerca) la fa un LLM,
+selezionabile al volo dalla sidebar (**🤖 AI**) fra ChatGPT, Gemini Flash e
+Claude Sonnet. Serve solo la key del provider che usi; senza key si ricade
+sulle regole euristiche di `resolver.py`. Preselezione via `LLM_PROVIDER`.
+
+## Aggiornamento dei dati
+
+- **Manuale**: sidebar → *Aggiorna tutto* (tutte le categorie) o *Mancanti*
+  (solo quelle mai analizzate, consuma meno crediti).
+- **Nuova categoria**: sidebar → *➕ Aggiungi categoria*. Alla conferma parte
+  la sincronizzazione DataForSEO **solo per quella categoria** e il calendario
+  editoriale si aggiorna da solo.
+- **Automatico mensile (in-app)**: l'interruttore in sidebar rilancia
+  l'aggiornamento completo quando i dati superano i 30 giorni. Attenzione: si
+  attiva solo *quando qualcuno apre la dashboard* — Streamlit non ha uno
+  scheduler proprio.
+- **Automatico vero (cron)**: `sync_monthly.py` gira senza interfaccia.
+  ```bash
+  0 4 1 * * cd /path/gedshop-trends-tool && python sync_monthly.py >> data/sync.log 2>&1
+  ```
+  Il `cd` nella cartella serve: da lì lo script legge lo stesso
+  `.streamlit/secrets.toml` dell'app. Altrove servono le variabili d'ambiente.
+
+## Le due versioni di Google Trends
+
+Google Trends convive oggi in due varianti con numeri diversi:
+
+- **Explore "classico"**, indice 0-100 **rinormalizzato a ogni richiesta**
+  (dipende da intervallo di date e set di keyword confrontate). È quello che
+  usa l'endpoint DataForSEO `keywords_data/google_trends/explore/live`, cioè
+  questo tool.
+- **API ufficiale Google Trends** (alpha su invito da luglio 2025): scala
+  **costante** fra richieste, ~1800 giorni di storico, aggregazioni
+  giorno/settimana/mese/anno. Valori assoluti diversi per costruzione.
+
+Attenzione a non confonderli con il prodotto **DataForSEO Trends API**, che
+non è Google: è dato clickstream proprietario, con numeri suoi.
+
+Ogni record salva `data_source` e `fetched_at` (visibili nel tab *Sorgenti
+AI*): se un giorno cambia l'endpoint, si vede subito da dove arriva ogni curva
+invece di doverlo dedurre dai numeri.
+
 ## Fase 0 — da validare con le tue API
 
 Nel tab **🔧 Debug** lancia una keyword di test (es. `agende`) e controlla il
@@ -45,7 +89,11 @@ in v1 lavoriamo su search term nel mercato scelto.
 
 | File | Ruolo |
 |------|-------|
-| `app.py` | UI Streamlit (4 tab) |
+| `app.py` | UI Streamlit (4 tab) + sidebar di comando |
+| `dashboard.html` | frontend embeddato (grafici SVG, calendario editoriale) |
+| `llm_selector.py` | scelta della sorgente Trends via LLM (ChatGPT/Gemini/Claude) |
+| `analysis.py` | orchestratore: candidati → LLM → DataForSEO → stagionalità |
+| `sync_monthly.py` | aggiornamento da cron, senza interfaccia |
 | `seasonality.py` | cuore deterministico: profilo mensile, salita/picco/pubblicazione |
 | `providers/base.py` | interfaccia astratta provider (switchabile) |
 | `providers/dataforseo.py` | client DataForSEO → Google Trends |

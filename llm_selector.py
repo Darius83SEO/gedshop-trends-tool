@@ -6,12 +6,16 @@ DOMANDA reale del prodotto, scartando i significati fuori tema (es. 'penne'=past
 'shopper'=catena di farmacie, 'agende'=identita' di genere). Non fa conti e non
 scarica dati: legge solo titolo+tipo. Una chiamata piccola per categoria.
 
+Il modello e' intercambiabile (ChatGPT / Gemini Flash / Claude Sonnet): si sceglie
+dalla sidebar, il prompt e la logica di parsing restano identici per tutti.
+
 Fallback: se non c'e' la key o l'LLM fallisce, si usa la regola euristica di
 resolver.decide().
 """
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 
 import config
@@ -33,10 +37,95 @@ class SourceChoice:
     alt_type: str | None = None
 
 
-def _client():
+_SYSTEM = "Sei un analista SEO. Rispondi solo JSON valido."
+
+# Schema della risposta: usato dove il provider sa vincolarla (Claude).
+_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "choice": {"type": "integer"},
+        "choice_title": {"type": "string"},
+        "alt": {"type": "integer"},
+        "confidence": {"type": "string", "enum": ["alta", "media", "bassa"]},
+        "reason": {"type": "string"},
+    },
+    "required": ["choice", "choice_title", "alt", "confidence", "reason"],
+    "additionalProperties": False,
+}
+
+# timeout stretto + poche retry: evita blocchi lunghi se l'API non risponde
+_TIMEOUT_S = 25.0
+
+
+def _extract_json(text: str) -> dict:
+    """JSON dalla risposta, tollerante a ```json ... ``` o testo attorno."""
+    t = (text or "").strip()
+    if t.startswith("```"):
+        t = re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", t).strip()
+    try:
+        return json.loads(t)
+    except json.JSONDecodeError:
+        m = re.search(r"\{.*\}", t, re.S)
+        if not m:
+            raise
+        return json.loads(m.group(0))
+
+
+def _ask_openai(conf: dict, prompt: str) -> str:
     from openai import OpenAI
-    # timeout stretto + poche retry: evita blocchi lunghi se l'API non risponde
-    return OpenAI(api_key=config.OPENAI_API_KEY, timeout=25.0, max_retries=1)
+    client = OpenAI(api_key=conf["key"], timeout=_TIMEOUT_S, max_retries=1)
+    resp = client.chat.completions.create(
+        model=conf["model"],
+        messages=[{"role": "system", "content": _SYSTEM},
+                  {"role": "user", "content": prompt}],
+        temperature=0,
+        response_format={"type": "json_object"},
+    )
+    return resp.choices[0].message.content
+
+
+def _ask_gemini(conf: dict, prompt: str) -> str:
+    from google import genai
+    from google.genai import types
+    client = genai.Client(api_key=conf["key"],
+                          http_options=types.HttpOptions(timeout=int(_TIMEOUT_S * 1000)))
+    resp = client.models.generate_content(
+        model=conf["model"],
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=_SYSTEM,
+            temperature=0,
+            response_mime_type="application/json",
+            # compito di sola classificazione: niente ragionamento, meno costo
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+        ),
+    )
+    return resp.text
+
+
+def _ask_anthropic(conf: dict, prompt: str) -> str:
+    import anthropic
+    client = anthropic.Anthropic(api_key=conf["key"], timeout=_TIMEOUT_S, max_retries=1)
+    # niente temperature: i modelli Sonnet 5 / 4.6 la rifiutano (400)
+    kwargs = dict(model=conf["model"], max_tokens=4096, system=_SYSTEM,
+                  messages=[{"role": "user", "content": prompt}])
+    try:
+        resp = client.messages.create(
+            output_config={"effort": "low",
+                           "format": {"type": "json_schema", "schema": _SCHEMA}},
+            **kwargs)
+    except Exception:
+        # SDK vecchio o modello senza structured outputs: il JSON e' gia'
+        # richiesto nel prompt, _extract_json fa il resto.
+        resp = client.messages.create(**kwargs)
+    return next((b.text for b in resp.content if b.type == "text"), "")
+
+
+_ASK = {"openai": _ask_openai, "gemini": _ask_gemini, "anthropic": _ask_anthropic}
+
+
+def _ask_llm(prompt: str) -> str:
+    return _ASK[config.get_llm_provider()](config.llm_conf(), prompt)
 
 
 def _build_prompt(query_term, category_name, candidates):
@@ -102,16 +191,7 @@ def choose_source(query_term: str, category_name: str,
 
     try:
         prompt = _build_prompt(query_term, category_name, candidates)
-        resp = _client().chat.completions.create(
-            model=config.OPENAI_MODEL,
-            messages=[
-                {"role": "system", "content": "Sei un analista SEO. Rispondi solo JSON valido."},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0,
-            response_format={"type": "json_object"},
-        )
-        data = json.loads(resp.choices[0].message.content)
+        data = _extract_json(_ask_llm(prompt))
         idx = _resolve_choice(int(data.get("choice", 0)),
                               str(data.get("choice_title", "")), candidates)
         reason = str(data.get("reason", "")).strip()
@@ -125,7 +205,7 @@ def choose_source(query_term: str, category_name: str,
         alt = candidates[alt_i - 1] if 0 < alt_i <= len(candidates) and alt_i != idx else None
     except Exception as e:
         fb = _heuristic(query_term, candidates)
-        fb.reason = f"LLM non disponibile ({e}); {fb.reason}"
+        fb.reason = f"{config.llm_label()} non disponibile ({e}); {fb.reason}"
         return fb
 
     # va rivisto da un umano se l'LLM non e' sicuro, oppure se la stringa e'

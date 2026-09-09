@@ -23,6 +23,12 @@ API_URL = "https://api.dataforseo.com/v3/keywords_data/google_trends/explore/liv
 
 class DataForSEOProvider(TrendsProvider):
     name = "dataforseo"
+    # Da tracciare nel record: Google Trends convive in due varianti (Explore
+    # "classico" con indice 0-100 rinormalizzato a ogni richiesta, e la nuova
+    # API ufficiale con scala costante). Questo endpoint e' il primo. Salvando
+    # la sorgente di ogni scarico, il giorno in cui cambia si vede da dove
+    # arriva ciascuna curva invece di dover indovinare.
+    source_id = "dataforseo:google_trends/explore/live (indice 0-100)"
 
     def __init__(self, login: str, password: str, timeout: int = 60):
         self.login = login

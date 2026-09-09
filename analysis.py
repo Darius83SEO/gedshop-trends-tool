@@ -10,7 +10,7 @@ la sorgente attiva gia' decisa. Nessun LLM nei calcoli di stagionalita'.
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import config
 import llm_selector
@@ -86,6 +86,9 @@ def analyze_category(provider, name: str, query_term: str, geo: str = "IT") -> d
 
     return {
         "query_term": query_term, "geo": geo, "via": choice.via, "note": note,
+        # provenienza: quale endpoint Trends ha prodotto questi numeri e quando
+        "data_source": getattr(provider, "source_id", getattr(provider, "name", "?")),
+        "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "active_mode": active, "portable_cross_market": active == "topic",
         "confidence": choice.confidence, "needs_review": choice.needs_review,
         "candidates": [{"mid": c.mid, "title": c.title, "type": c.type, "kind": c.kind}

@@ -116,14 +116,33 @@
   .mp-topic { background: color-mix(in srgb, var(--primary) 22%, transparent); color: #7fbaf5; }
   .mp-term { background: color-mix(in srgb, var(--flat) 24%, transparent); color: #b7c2cd; }
 
-  .cal { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+  /* Calendario: un mese per riga, da gennaio a dicembre. */
+  .cal { display: flex; flex-direction: column; gap: 11px; }
   .month { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
-  .month header { display: flex; align-items: baseline; justify-content: space-between; padding: 13px 16px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+  .month header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 13px 18px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
   .month header .m { font-weight: 700; font-size: 1.02rem; } .month header .c { font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; }
-  .month ul { list-style: none; margin: 0; padding: 8px 16px 15px; }
-  .month li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 0; font-size: .92rem; border-bottom: 1px dashed var(--border); }
+  .month ul { list-style: none; margin: 0; padding: 6px 18px 14px; }
+  .month li { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; padding: 9px 0; font-size: .92rem; border-bottom: 1px dashed var(--border); }
   .month li:last-child { border-bottom: none; }
+  .month li .cname { font-weight: 600; min-width: 160px; }
+  .month li .why { flex: 1; min-width: 240px; font-size: .85rem; color: var(--muted); }
+  .month li .why b { color: var(--text); }
+  .month.now { border-color: color-mix(in srgb, var(--publish) 55%, var(--border)); }
+  .month.now header { background: color-mix(in srgb, var(--publish) 13%, var(--surface-2)); }
+  .month.void { opacity: .55; } .month.void header { border-bottom: none; }
+  .nowpill { font-size: .64rem; background: var(--publish); color: #fff; padding: 3px 9px; border-radius: 20px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; margin-left: 8px; vertical-align: 2px; }
   .peakpill { font-size: .71rem; color: #7fbaf5; background: color-mix(in srgb, var(--primary) 18%, transparent); padding: 3px 9px; border-radius: 20px; white-space: nowrap; font-weight: 600; }
+
+  .nowbox { background: color-mix(in srgb, var(--publish) 11%, var(--surface)); border: 1px solid color-mix(in srgb, var(--publish) 42%, var(--border)); border-left: 5px solid var(--publish); border-radius: var(--radius); box-shadow: var(--shadow); padding: 17px 21px; margin-bottom: 16px; }
+  .nowbox .nb-lab { font-size: .71rem; text-transform: uppercase; letter-spacing: .09em; color: var(--publish); font-weight: 700; margin-bottom: 7px; }
+  .nowbox .nb-title { font-size: 1.14rem; line-height: 1.42; margin-bottom: 8px; }
+  .nowbox .nb-sub { font-size: .87rem; color: var(--muted); max-width: 78ch; }
+  .nowbox ol { margin: 10px 0 0; padding-left: 20px; font-size: .89rem; }
+  .nowbox ol li { margin-bottom: 4px; }
+
+  .addbox { background: color-mix(in srgb, var(--ok) 10%, var(--surface-2)); border: 1px solid color-mix(in srgb, var(--ok) 32%, var(--border)); border-left: 4px solid var(--ok); border-radius: 0 11px 11px 0; padding: 13px 17px; margin-bottom: 16px; font-size: .88rem; }
+  .addbox b { color: var(--text); }
+  .provenance { margin-top: 11px; font-size: .76rem; color: var(--muted); }
   .note { margin-top: 14px; font-size: .82rem; color: var(--muted); }
   .empty { color: var(--muted); padding: 30px; text-align: center; }
 </style>
@@ -141,11 +160,21 @@
     <div id="catDetail"></div>
   </section>
   <section class="panel" id="tab-cal">
-    <p class="lead">Categorie da <b>pubblicare</b> mese per mese, in base alla sorgente attiva. Tra parentesi il mese di picco.</p>
+    <div class="nowbox" id="calNow"></div>
+    <div class="explain">
+      <h4>📖 Come si legge questo calendario</h4>
+      <p>Ogni riga è un <b>mese dell'anno</b>, da gennaio a dicembre. Dentro ci sono le categorie di prodotto per cui conviene <b>pubblicare o aggiornare le pagine proprio in quel mese</b>.</p>
+      <p><b>Perché in anticipo e non quando la gente cerca?</b> Una pagina nuova o rifatta non si posiziona su Google il giorno dopo: servono settimane. Se pubblichi quando la domanda è già al massimo, arrivi a festa finita. Quindi partiamo dal mese in cui le ricerche toccano il <b>picco</b>, torniamo indietro al mese in cui <b>iniziano a salire</b> e togliamo ancora un mese di margine. Quel mese è il momento giusto per pubblicare.</p>
+      <p><b>Cosa si pubblica.</b> La pagina di categoria del prodotto e i contenuti che la sostengono: guida all'acquisto, articolo del blog, landing per le campagne. Spesso non serve scrivere da zero: basta aggiornare e ampliare quello che c'è già.</p>
+      <p><b>In che ordine.</b> Dentro ogni mese le categorie sono ordinate dalla più stagionale alla meno. La percentuale di <b>forza</b> dice quanto è marcata la differenza tra alta e bassa stagione: più è alta, più conta arrivare puntuali su quella categoria.</p>
+    </div>
     <div class="cal" id="calGrid"></div><p class="note" id="flatNote"></p>
   </section>
   <section class="panel" id="tab-conf">
-    <p class="lead">Per ogni categoria l'AI (gpt-4.1) sceglie la sorgente Google Trends più allineata al prodotto. Qui vedi il perché; l'override permanente si fa dalla sidebar.</p>
+    <p class="lead">Per ogni categoria l'AI (<b>__AI__</b>) sceglie la sorgente Google Trends più allineata al prodotto. Qui vedi il perché; l'override permanente si fa dalla sidebar.</p>
+    <div class="addbox">
+      <b>➕ Aggiungere una categoria.</b> Si fa dalla <b>barra laterale a sinistra</b> → <b>«➕ Aggiungi categoria»</b>: scrivi il nome e premi <i>Aggiungi e sincronizza</i>. Parte subito lo scarico da DataForSEO <b>solo per quella categoria</b>, l'AI sceglie la sorgente e il <b>calendario editoriale si aggiorna da solo</b>. Le altre categorie non vengono ritoccate e non consumano crediti.
+    </div>
     <div class="explain">
       <h4>⚠ Che cosa si valida (e cosa no)</h4>
       <p>La validazione <b>non</b> riguarda i numeri: i dati di Google Trends sono quelli e non si toccano. Riguarda <b>quale curva stiamo guardando</b>.</p>
@@ -335,31 +364,69 @@ function renderConf() {
     return `<div class="conf-card ${rev ? 'rev' : ''}"><div class="conf-head"><h3>${c.name}</h3>
       <span class="src-chip ${isTopic ? 'src-topic' : 'src-term'}">${isTopic ? 'Topic' : 'Query di ricerca'}</span>${revChip}
       <span style="margin-left:auto;color:var(--muted);font-size:.82rem">via ${c.via || 'llm'}</span></div>
-      <div class="conf-body"><div class="postilla"><span class="lab">🧭 gpt-4.1</span>${c.note || ''}${rev ? ' <span class="review-flag">— conferma o correggi dalla sidebar.</span>' : ''}</div>
+      <div class="conf-body"><div class="postilla"><span class="lab">🧭 __AI__</span>${c.note || ''}${rev ? ' <span class="review-flag">— conferma o correggi dalla sidebar.</span>' : ''}</div>
         <div class="compare">
           ${mini('term', c.term, { title: 'Query di ricerca «' + c.query_term + '»', kind: '🔤 letterale' })}
           ${mini('topic', c.topic, { title: c.topic ? 'Topic «' + c.topic.title + '»' : 'Topic non pertinente', kind: c.topic ? '🎯 ' + c.topic.ttype : '' })}
         </div>
         ${cands.length ? `<div class="cands">Candidati Google Trends: ${cands.map(x => `<b>${x.title}</b> [${x.type}]`).join(' · ')}</div>` : ''}
+        ${c.data_source ? `<div class="provenance">Dati: ${c.data_source}${c.fetched_at ? ' · scaricati il ' + fmtDate(c.fetched_at) : ''}</div>` : ''}
       </div></div>`;
   }).join('');
   const n = cats.filter(c => c.needs_review).length;
   const badge = document.getElementById('revCount');
   if (badge) { badge.textContent = n; badge.style.display = n ? '' : 'none'; }
 }
+/* "a marzo" ma "ad aprile"/"ad agosto"/"ad ottobre" */
+const aMese = m => (/^[aeiou]/.test(MESI[m - 1]) ? 'ad ' : 'a ') + MESI[m - 1];
+const elenco = names => names.length === 1 ? `<b>${names[0]}</b>`
+  : names.slice(0, -1).map(n => `<b>${n}</b>`).join(', ') + ' e <b>' + names[names.length - 1] + '</b>';
+
 function renderCal() {
   const grid = document.getElementById('calGrid'); grid.innerHTML = '';
-  const seasonal = cats.map(c => ({ name: c.name, v: activeView(c.name) })).filter(x => x.v && x.v.seasonal);
-  const byMonth = {}; seasonal.forEach(x => { (byMonth[x.v.pub] ??= []).push(x); });
-  Object.keys(byMonth).map(Number).sort((a, b) => a - b).forEach(mo => {
-    const list = byMonth[mo].sort((a, b) => b.v.strength - a.v.strength);
-    const el = document.createElement('div'); el.className = 'month';
-    el.innerHTML = `<header><span class="m">${cap(MESI[mo - 1])}</span><span class="c">${list.length} categori${list.length > 1 ? 'e' : 'a'}</span></header>
-      <ul>${list.map(x => `<li><span>${x.name}</span><span class="peakpill">picco ${ABBR[x.v.peak - 1]}</span></li>`).join('')}</ul>`;
+  const today = new Date(), nowM = today.getMonth() + 1;
+  const views = cats.map(c => ({ name: c.name, v: activeView(c.name) })).filter(x => x.v);
+  const byMonth = {};
+  views.filter(x => x.v.seasonal).forEach(x => { (byMonth[x.v.pub] ??= []).push(x); });
+  const ofMonth = m => (byMonth[m] || []).slice().sort((a, b) => b.v.strength - a.v.strength);
+
+  /* --- riquadro in alto: cosa fare adesso, alla data di oggi --- */
+  const oggi = today.getDate() + ' ' + MESI[today.getMonth()] + ' ' + today.getFullYear();
+  const now = ofMonth(nowM);
+  const box = document.getElementById('calNow');
+  if (now.length) {
+    box.innerHTML = `<div class="nb-lab">📌 oggi è il ${oggi}</div>
+      <div class="nb-title">Suggeriamo di intervenire su ${elenco(now.map(x => x.name))}.</div>
+      <div class="nb-sub">Sono le categorie il cui mese di pubblicazione è <b>${cap(MESI[nowM - 1])}</b>: pubblica o aggiorna adesso queste pagine, così saranno già posizionate quando le ricerche cominceranno a salire. Partendo dalla prima, che è la più stagionale.</div>
+      <ol>${now.map(x => `<li><b>${x.name}</b> — ricerche in salita da ${MESI[x.v.rise - 1]}, picco ${aMese(x.v.peak)}.</li>`).join('')}</ol>`;
+  } else {
+    let next = null;
+    for (let i = 1; i <= 12; i++) { const m = ((nowM - 1 + i) % 12) + 1; if (ofMonth(m).length) { next = m; break; } }
+    box.innerHTML = `<div class="nb-lab">📌 oggi è il ${oggi}</div>
+      <div class="nb-title">${cap(MESI[nowM - 1])} è un mese libero: nessuna categoria da pubblicare adesso.</div>
+      <div class="nb-sub">${next
+        ? `Il prossimo intervento è ${aMese(next)}, su ${elenco(ofMonth(next).map(x => x.name))}. Puoi usare questo mese per preparare quei contenuti in anticipo.`
+        : 'Nessuna categoria stagionale nel dataset: vedi la nota in fondo.'}</div>`;
+  }
+
+  /* --- i 12 mesi, uno per riga, sempre da gennaio a dicembre --- */
+  for (let m = 1; m <= 12; m++) {
+    const list = ofMonth(m);
+    const el = document.createElement('div');
+    el.className = 'month' + (m === nowM ? ' now' : '') + (list.length ? '' : ' void');
+    const testa = `<header><span class="m">${cap(MESI[m - 1])}${m === nowM ? ' <span class="nowpill">siamo qui</span>' : ''}</span>
+      <span class="c">${list.length ? list.length + ' categori' + (list.length > 1 ? 'e' : 'a') + ' da pubblicare' : 'niente in programma'}</span></header>`;
+    el.innerHTML = testa + (list.length ? `<ul>${list.map(x => `<li>
+        <span class="cname">${x.name}</span>
+        <span class="why">ricerche in salita da <b>${MESI[x.v.rise - 1]}</b>, picco ${aMese(x.v.peak)}</span>
+        <span class="peakpill">forza ${(x.v.strength * 100).toFixed(0)}%</span></li>`).join('')}</ul>` : '');
     grid.appendChild(el);
-  });
-  const flat = cats.map(c => ({ name: c.name, v: activeView(c.name) })).filter(x => x.v && !x.v.seasonal).map(x => x.name);
-  document.getElementById('flatNote').innerHTML = flat.length ? `⚪ Poco stagionali (pubblicabili tutto l'anno): <b>${flat.join(', ')}</b>.` : '';
+  }
+
+  const flat = views.filter(x => !x.v.seasonal).map(x => x.name);
+  document.getElementById('flatNote').innerHTML = flat.length
+    ? `⚪ <b>Fuori calendario</b> — queste categorie non hanno una vera stagione: l'interesse resta più o meno uguale tutto l'anno, quindi puoi pubblicarle quando vuoi, riempiendo i mesi vuoti. Sono: <b>${flat.join(', ')}</b>.`
+    : '';
 }
 function renderList() {
   const tb = document.querySelector('#listTable tbody'); tb.innerHTML = '';

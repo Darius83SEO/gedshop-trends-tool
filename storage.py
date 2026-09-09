@@ -49,7 +49,10 @@ class PostgresStorage:
         self._ensure_schema()
 
     def _conn(self):
-        return self._psycopg2.connect(self.dsn)
+        # timeout esplicito: su Neon free il compute puo' essere sospeso e senza
+        # timeout la connessione resta appesa finche' l'app non viene killata
+        # (su Streamlit Cloud si vede come "Oh no. Error running app").
+        return self._psycopg2.connect(self.dsn, connect_timeout=10)
 
     def _ensure_schema(self):
         ddl = """
@@ -65,9 +68,26 @@ class PostgresStorage:
             payload JSONB DEFAULT '{}'::jsonb,
             UNIQUE (site_url, name, geo)
         );
+        CREATE TABLE IF NOT EXISTS gt_settings (
+            key TEXT PRIMARY KEY, value TEXT, updated_at TIMESTAMPTZ DEFAULT now()
+        );
         """
         with self._conn() as c, c.cursor() as cur:
             cur.execute(ddl); c.commit()
+
+    def get_setting(self, key, default=None):
+        with self._conn() as c, c.cursor() as cur:
+            cur.execute("SELECT value FROM gt_settings WHERE key=%s", (key,))
+            row = cur.fetchone()
+        return row[0] if row else default
+
+    def set_setting(self, key, value):
+        sql = """
+        INSERT INTO gt_settings (key, value) VALUES (%s,%s)
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now();
+        """
+        with self._conn() as c, c.cursor() as cur:
+            cur.execute(sql, (key, str(value))); c.commit()
 
     def upsert_category(self, site_url, name, query_term, geo, url=None) -> int:
         sql = """
@@ -144,8 +164,17 @@ class JsonStorage:
     def _load(self):
         if os.path.exists(self.path):
             with open(self.path, encoding="utf-8") as f:
-                return json.load(f)
-        return {"seq": 0, "categories": {}}
+                data = json.load(f)
+            data.setdefault("settings", {})
+            return data
+        return {"seq": 0, "categories": {}, "settings": {}}
+
+    def get_setting(self, key, default=None):
+        return self._data.get("settings", {}).get(key, default)
+
+    def set_setting(self, key, value):
+        self._data.setdefault("settings", {})[key] = str(value)
+        self._save()
 
     def _save(self):
         with open(self.path, "w", encoding="utf-8") as f:
