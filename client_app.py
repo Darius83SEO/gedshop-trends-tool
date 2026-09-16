@@ -31,7 +31,15 @@ footer {visibility: hidden;}
 [data-testid="stHeader"] {background: transparent;}
 [data-testid="stExpandSidebarButton"] {display: inline-flex !important; visibility: visible !important;}
 .block-container {padding-top: 1.2rem; padding-bottom: 0; max-width: 1250px;}
-section[data-testid="stSidebar"] {border-right: 1px solid #263849; min-width: 320px;}
+section[data-testid="stSidebar"] {border-right: 1px solid #263849;}
+/* Barra chiusa: la freccina di riapertura diventa un pulsante "Menu" ben
+   visibile, cosi' si capisce che i comandi sono solo nascosti. */
+[data-testid="stExpandSidebarButton"] {background: #317fd2 !important; border-radius: 10px !important;
+  padding: 7px 14px 7px 10px !important; width: auto !important; height: auto !important;
+  box-shadow: 0 2px 10px rgba(0,0,0,.35); gap: 4px;}
+[data-testid="stExpandSidebarButton"]:hover {background: #066aab !important;}
+[data-testid="stExpandSidebarButton"] span {color: #fff !important;}
+[data-testid="stExpandSidebarButton"]::after {content: "Menu"; color: #fff; font-weight: 600; font-size: .9rem;}
 /* etichette lunghe (categorie, Topic): vanno a capo invece di essere troncate */
 section[data-testid="stSidebar"] [data-testid="stRadio"] label p {white-space: normal; overflow-wrap: anywhere;}
 </style>
