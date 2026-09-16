@@ -10,6 +10,7 @@ Uso:
     python sync_monthly.py --geo ES
     python sync_monthly.py --max-age 30     # salta se aggiornate da meno di 30 gg
     python sync_monthly.py --only Agende --only Penne
+    python sync_monthly.py --llm xai --model grok-4.6
     python sync_monthly.py --dry-run
 
 Credenziali: se lanci lo script dalla cartella del progetto vale
@@ -53,11 +54,13 @@ def main(argv=None) -> int:
                     help="limita a queste categorie (ripetibile)")
     ap.add_argument("--llm", choices=sorted(config.LLM_PROVIDERS), default=None,
                     help="provider LLM per la scelta della sorgente")
+    ap.add_argument("--model", default="",
+                    help="modello del provider (default: quello dei secrets)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
 
     if args.llm:
-        config.set_llm_provider(args.llm)
+        config.set_llm_provider(args.llm, args.model)
     if not config.has_provider_creds():
         print("ERRORE: DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD non impostate.", file=sys.stderr)
         return 2
@@ -81,18 +84,17 @@ def main(argv=None) -> int:
 
     prov = DataForSEOProvider(config.DATAFORSEO_LOGIN, config.DATAFORSEO_PASSWORD)
     ko = []
-    for i, cat in enumerate(cats, start=1):
-        try:
-            rec = analysis.analyze_category(prov, cat["name"], cat["query_term"], args.geo)
-            if rec.get("term") or rec.get("topic"):
-                storage.save_record(cat["id"], rec)
-                print(f"  {i}/{len(cats)} OK   {cat['name']}")
-            else:
-                ko.append(cat["name"])
-                print(f"  {i}/{len(cats)} VUOTO {cat['name']} (nessun dato Trends)")
-        except Exception as e:
-            ko.append(f"{cat['name']}: {e}")
-            print(f"  {i}/{len(cats)} KO   {cat['name']}: {e}")
+    for i, (cat, rec, err) in enumerate(
+            analysis.analyze_many(prov, cats, args.geo, config.llm_conf()), start=1):
+        if err is not None:
+            ko.append(f"{cat['name']}: {err}")
+            print(f"  {i}/{len(cats)} KO   {cat['name']}: {err}")
+        elif rec.get("term") or rec.get("topic"):
+            storage.save_record(cat["id"], rec)
+            print(f"  {i}/{len(cats)} OK   {cat['name']}")
+        else:
+            ko.append(cat["name"])
+            print(f"  {i}/{len(cats)} VUOTO {cat['name']} (nessun dato Trends)")
 
     print(f"Fatto: {len(cats) - len(ko)} aggiornate, {len(ko)} con problemi.")
     return 1 if ko else 0

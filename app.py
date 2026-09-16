@@ -7,7 +7,7 @@ preset, analizza, override sorgente). Grafici e stile identici all'anteprima.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import streamlit as st
@@ -15,7 +15,6 @@ import streamlit.components.v1 as components
 
 import analysis
 import config
-import seasonality as S
 from crawler import crawl_categories
 from providers.dataforseo import DataForSEOProvider
 from storage import get_storage
@@ -34,11 +33,21 @@ footer {visibility: hidden;}
 [data-testid="stHeader"] {background: transparent;}
 [data-testid="stExpandSidebarButton"] {display: inline-flex !important; visibility: visible !important;}
 .block-container {padding-top: 1.2rem; padding-bottom: 0; max-width: 1250px;}
-section[data-testid="stSidebar"] {border-right: 1px solid #263849;}
+section[data-testid="stSidebar"] {border-right: 1px solid #263849; min-width: 340px;}
+/* etichette lunghe (categorie, Topic): vanno a capo invece di essere troncate */
+section[data-testid="stSidebar"] [data-testid="stRadio"] label p,
+section[data-testid="stSidebar"] [data-testid="stCheckbox"] label p {white-space: normal; overflow-wrap: anywhere;}
 </style>
 """, unsafe_allow_html=True)
 
-storage = get_storage()
+
+@st.cache_resource(show_spinner=False)
+def _storage():
+    """Una sola istanza per processo: pool di connessioni e schema creati una volta."""
+    return get_storage()
+
+
+storage = _storage()
 GEOS = list(config.GEO_MAP.keys())
 DASHBOARD = (Path(__file__).parent / "dashboard.html").read_text(encoding="utf-8")
 
@@ -47,13 +56,10 @@ def provider():
     return DataForSEOProvider(config.DATAFORSEO_LOGIN, config.DATAFORSEO_PASSWORD)
 
 
-def build_data(site_url, geo) -> dict:
+def build_data(cats) -> dict:
     """DATA per il frontend: {nome: record} solo categorie analizzate."""
-    out = {}
-    for cat in storage.list_categories(site_url, geo):
-        if cat.get("last_sync") and cat.get("payload"):
-            out[cat["name"]] = cat["payload"]
-    return out
+    return {c["name"]: c["payload"] for c in cats
+            if c.get("last_sync") and c.get("payload")}
 
 
 # ------------------------------------------------------- sincronizzazione
@@ -66,22 +72,26 @@ def flash(msg: str, kind: str = "success"):
 
 
 def run_analysis(targets, geo, label="Analisi…") -> list[str]:
-    """Scarica da DataForSEO e salva. Ritorna la lista dei problemi."""
+    """Scarica da DataForSEO e salva. Ritorna la lista dei problemi.
+
+    Le categorie girano in parallelo (analysis.analyze_many); salvataggio e
+    barra di avanzamento restano qui, nel thread di Streamlit.
+    """
     if not targets:
         return []
-    prov = provider()
-    prog = st.progress(0.0, label)
+    llm = config.llm_conf()  # letto qui: i thread di lavoro non vedono session_state
+    prog = st.progress(0.0, f"{label} 0/{len(targets)}")
     errs = []
-    for i, cat in enumerate(targets):
-        try:
-            rec = analysis.analyze_category(prov, cat["name"], cat["query_term"], geo)
-            if rec.get("term") or rec.get("topic"):
-                storage.save_record(cat["id"], rec)
-            else:
-                errs.append(cat["name"])
-        except Exception as e:
-            errs.append(f"{cat['name']}: {e}")
-        prog.progress((i + 1) / len(targets), f"{cat['name']} ({i + 1}/{len(targets)})")
+    for i, (cat, rec, err) in enumerate(
+            analysis.analyze_many(provider(), targets, geo, llm), start=1):
+        if err is not None:
+            errs.append(f"{cat['name']}: {err}")
+        elif rec.get("term") or rec.get("topic"):
+            storage.save_record(cat["id"], rec)
+        else:
+            errs.append(f"{cat['name']}: Google Trends non ha dati sufficienti "
+                        f"per «{cat['query_term']}»")
+        prog.progress(i / len(targets), f"{label} {i}/{len(targets)} · {cat['name']} fatto")
     prog.empty()
     return errs
 
@@ -128,21 +138,34 @@ with st.sidebar:
     # --- scelta del modello AI ---
     _providers = list(config.LLM_PROVIDERS.keys())
 
-    def _llm_option(key: str) -> str:
+    def _prov_option(key: str) -> str:
         c = config.LLM_PROVIDERS[key]
-        return f"{'🟢' if c['key'] else '⚪'} {c['label']} · {c['model']}"
+        return f"{'🟢' if c['key'] else '⚪'} {c['label']}"
 
-    with st.popover(f"🤖 AI: {config.llm_conf()['label']}", use_container_width=True,
+    with st.popover(f"🤖 AI: {config.llm_label()}", use_container_width=True,
                     help="Quale LLM legge i candidati di Google Trends e sceglie la "
                          "sorgente (Topic o query di ricerca) per ogni categoria. "
                          "Vale dalla prossima analisi: le categorie già analizzate "
                          "restano come sono finché non le rianalizzi."):
-        st.radio("Modello", _providers, key="llm_provider",
-                 index=_providers.index(config.DEFAULT_LLM_PROVIDER),
-                 format_func=_llm_option)
+        prov = st.radio("Provider", _providers, key="llm_provider",
+                        index=_providers.index(config.DEFAULT_LLM_PROVIDER),
+                        format_func=_prov_option, horizontal=True)
+        _pc = config.LLM_PROVIDERS[prov]
+        _mkey = f"llm_model_{prov}"
+        if st.session_state.get(_mkey) not in _pc["models"]:
+            st.session_state[_mkey] = _pc["default"]
+
+        def _model_option(m, newest=_pc["models"][0], dflt=_pc["default"]):
+            tags = (["più recente"] if m == newest else []) + (["predefinito"] if m == dflt else [])
+            return m + (f"  · {', '.join(tags)}" if tags else "")
+
+        st.selectbox("Modello", _pc["models"], key=_mkey, format_func=_model_option,
+                     help="Il primo della lista è il più recente. Per scegliere la "
+                          "sorgente basta anche un modello economico: i più nuovi "
+                          "costano di più e rispondono più lentamente.")
         _cur = config.llm_conf()
         if _cur["key"]:
-            st.caption(f"Attivo: **{config.llm_label()}**")
+            st.caption(f"Attivo: **{config.llm_label(_cur)}**")
         else:
             st.warning(f"Manca `{_cur['secret']}` nei secrets: senza key si usano "
                        f"le regole euristiche.")
@@ -156,6 +179,7 @@ with st.sidebar:
     st.divider()
 
     # ---------------------------------------------- dati DataForSEO (in evidenza)
+    # UNA sola lettura dal DB per rerun: tutto il resto della pagina usa `cats`
     cats = storage.list_categories(site_url, geo)
     pending = [c for c in cats if not c.get("last_sync")]
     sync = sync_state(cats)
@@ -189,7 +213,7 @@ with st.sidebar:
     if target:
         errs = run_analysis(target, geo, "Aggiornamento da DataForSEO…")
         if errs:
-            flash("Aggiornate con problemi su: " + ", ".join(errs), "warning")
+            flash("Aggiornate con problemi su: " + "; ".join(errs), "warning")
         else:
             flash(f"{len(target)} categorie aggiornate.")
         st.rerun()
@@ -210,7 +234,7 @@ with st.sidebar:
         st.session_state["_auto_sync_done"] = True
         errs = run_analysis(cats, geo, "Aggiornamento mensile automatico…")
         flash(f"Aggiornamento mensile automatico eseguito su {len(cats)} categorie."
-              + (" Problemi su: " + ", ".join(errs) if errs else ""),
+              + (" Problemi su: " + "; ".join(errs) if errs else ""),
               "warning" if errs else "success")
         st.rerun()
 
@@ -222,17 +246,19 @@ with st.sidebar:
                    "questa categoria**; badge, tabella e calendario editoriale si "
                    "aggiornano da soli.")
         with st.form("add_cat", clear_on_submit=True):
-            nc_name = st.text_input("Nome categoria", placeholder="es. Borracce termiche")
+            nc_name = st.text_input("Nome categoria", placeholder="es. Borracce termiche",
+                                    max_chars=80)
             nc_term = st.text_input("Parola da cercare su Google Trends",
-                                    placeholder="vuoto = usa il nome della categoria")
+                                    placeholder="vuoto = usa il nome della categoria",
+                                    max_chars=80)
             nc_url = st.text_input("URL della categoria (facoltativo)",
                                    placeholder="https://www.gedshop.it/…")
             add = st.form_submit_button("➕ Aggiungi e sincronizza",
                                         use_container_width=True, type="primary",
                                         disabled=no_creds)
         if add:
-            name = (nc_name or "").strip()
-            term = (nc_term or "").strip() or name
+            name = " ".join((nc_name or "").split())
+            term = " ".join((nc_term or "").split()) or name.lower()
             if not name:
                 st.error("Serve almeno il nome della categoria.")
             elif any(c["name"].strip().lower() == name.lower() for c in cats):
@@ -243,10 +269,11 @@ with st.sidebar:
                 errs = run_analysis([{"id": cid, "name": name, "query_term": term}],
                                     geo, f"Sincronizzo «{name}»…")
                 if errs:
-                    flash(f"«{name}» aggiunta, ma Google Trends non ha dati "
-                          f"sufficienti per «{term}». Prova un termine più generico.",
-                          "warning")
+                    flash(f"«{name}» salvata ma non analizzata ({errs[0].split(': ', 1)[-1]}). "
+                          f"Resta tra le «Mancanti»: prova un termine più generico "
+                          f"o riprova più tardi.", "warning")
                 else:
+                    st.session_state["_focus"] = name
                     flash(f"«{name}» aggiunta e sincronizzata: calendario aggiornato.")
                 st.rerun()
 
@@ -269,19 +296,28 @@ with st.sidebar:
 
         cands = st.session_state.get("cands", [])
         if cands:
-            picked = st.multiselect("Categorie trovate", [c["name"] for c in cands],
-                                    default=[c["name"] for c in cands])
-            if st.button("💾 Salva selezionate"):
-                for c in cands:
-                    if c["name"] in picked:
-                        storage.upsert_category(site_url, c["name"], c["name"], geo, url=c.get("url"))
+            known = {c["name"].strip().lower() for c in cats}
+            with st.form("crawl_pick"):
+                st.caption(f"**{len(cands)} categorie trovate**: togli la spunta a "
+                           f"quelle da scartare.")
+                keep = []
+                for i, c in enumerate(cands):
+                    dup = c["name"].strip().lower() in known
+                    if st.checkbox(c["name"] + ("  (già presente)" if dup else ""),
+                                   value=not dup, key=f"crawl_{i}", help=c.get("url")):
+                        keep.append(c)
+                save = st.form_submit_button("💾 Salva selezionate", use_container_width=True)
+            if save:
+                for c in keep:
+                    storage.upsert_category(site_url, c["name"], c["name"].lower(), geo,
+                                            url=c.get("url"))
                 st.session_state.pop("cands", None)
-                flash(f"Salvate {len(picked)} categorie: ora usa «Mancanti».")
+                flash(f"Salvate {len(keep)} categorie: ora usa «Mancanti».")
                 st.rerun()
 
     # --- validatore umano (solo casi ambigui) ---
-    done_all = [c for c in storage.list_categories(site_url, geo) if c.get("last_sync")]
-    review = [c for c in done_all if (c.get("payload") or {}).get("needs_review")]
+    done = [c for c in cats if c.get("last_sync") and c.get("payload")]
+    review = [c for c in done if c["payload"].get("needs_review")]
     with st.expander(f"⚠️ Da validare ({len(review)})", expanded=bool(review)):
         st.caption(
             "**Cosa validi:** non i numeri (Google Trends è quello), ma **quale curva** "
@@ -301,51 +337,62 @@ with st.sidebar:
                    "topic": f"🎯 «{rec['topic']['title']}»" if has_topic else ""}
             cur = rec.get("active_mode", "term")
             pick = st.radio("Sorgente", opts, index=opts.index(cur) if cur in opts else 0,
-                            format_func=lambda x: lbl[x], key=f"val_{cat['id']}", horizontal=True)
+                            format_func=lambda x: lbl[x], key=f"val_{cat['id']}")
             if st.button("✓ Valida", key=f"valbtn_{cat['id']}"):
                 if pick != cur:
                     rec["active_mode"] = pick
                     rec["portable_cross_market"] = pick == "topic"
                 rec["needs_review"] = False
-                storage.save_record(cat["id"], rec); st.rerun()
+                storage.save_record(cat["id"], rec, synced=False); st.rerun()
             st.divider()
 
     # --- override sorgente (qualsiasi categoria) ---
-    done = [c for c in storage.list_categories(site_url, geo) if c.get("last_sync")]
     if done:
         with st.expander("🧭 Cambia sorgente (override)", expanded=False):
             names = {c["name"]: c for c in done}
-            selc = st.selectbox("Categoria", list(names.keys()))
+            selc = st.radio("Categoria", list(names.keys()), key="ov_cat")
             cat = names[selc]; rec = cat["payload"]; has_topic = bool(rec.get("topic"))
             opts = ["term"] + (["topic"] if has_topic else [])
-            lbl = {"term": f"🔤 «{rec['query_term']}»",
-                   "topic": f"🎯 «{rec['topic']['title']}»" if has_topic else ""}
+            lbl = {"term": f"🔤 Query di ricerca «{rec['query_term']}»",
+                   "topic": f"🎯 Topic «{rec['topic']['title']}»" if has_topic else ""}
             cur = rec.get("active_mode", "term")
             new = st.radio("Sorgente attiva", opts, index=opts.index(cur) if cur in opts else 0,
-                           format_func=lambda x: lbl[x])
+                           format_func=lambda x: lbl[x], key=f"ov_mode_{cat['id']}")
             if new != cur:
                 storage.set_active_mode(cat["id"], new); st.rerun()
             cnds = [x for x in rec.get("candidates", []) if x.get("title") and x.get("mid")]
             if cnds:
-                labs = [f"{x['title']} [{x['type']}]" for x in cnds]
-                idx = st.selectbox("Cambia Topic (ricalcola)", range(len(cnds)), format_func=lambda i: labs[i])
-                if st.button("🔄 Usa questo Topic", disabled=not config.has_provider_creds()):
+                cur_mid = (rec.get("topic") or {}).get("mid")
+                idx = st.radio(
+                    "Cambia Topic (ricalcola)", range(len(cnds)),
+                    index=next((i for i, x in enumerate(cnds) if x["mid"] == cur_mid), 0),
+                    format_func=lambda i: f"{cnds[i]['title']} — {cnds[i]['type'] or 'senza tipo'}"
+                                          + ("  ✓ in uso" if cnds[i]["mid"] == cur_mid else ""),
+                    key=f"ov_topic_{cat['id']}")
+                if st.button("🔄 Usa questo Topic",
+                             disabled=no_creds or cnds[idx]["mid"] == cur_mid):
                     ch = cnds[idx]
                     with st.spinner(f"Scarico «{ch['title']}»…"):
                         v = analysis._view(provider(), ch["mid"], geo)
                     if v:
                         v.update(mid=ch["mid"], title=ch["title"], ttype=ch["type"])
                         rec["topic"] = v; rec["active_mode"] = "topic"
+                        rec["portable_cross_market"] = True
                         rec["note"] = f"Topic «{ch['title']}» scelto manualmente."
-                        storage.save_record(cat["id"], rec); st.rerun()
+                        storage.save_record(cat["id"], rec)
+                        st.session_state["_focus"] = cat["name"]
+                        st.rerun()
                     else:
                         st.warning("Nessun dato Trends per questo Topic.")
 
 
 # ------------------------------------------------------------------ main
-data = build_data(site_url, geo)
-# __DATA__ per ultimo: cosi' i segnaposto non vengono cercati dentro il JSON
+data = build_data(cats)
+# __FOCUS__: categoria da aprire subito (es. appena aggiunta), in JSON.
+# __DATA__ per ultimo: i segnaposto non vanno cercati dentro il JSON dei dati.
+focus = st.session_state.pop("_focus", None)
 html = (DASHBOARD.replace("__GEO__", geo)
                  .replace("__AI__", config.llm_label() if config.has_llm() else "regole euristiche")
+                 .replace("__FOCUS__", json.dumps(focus if focus in data else None, ensure_ascii=False))
                  .replace("__DATA__", json.dumps(data, ensure_ascii=False)))
 components.html(html, height=1500, scrolling=True)

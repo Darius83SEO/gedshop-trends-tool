@@ -11,6 +11,8 @@ cosi' da poter verificare la struttura reale con le tue API.
 from __future__ import annotations
 
 import base64
+import threading
+import time
 from datetime import date, timedelta
 
 import requests
@@ -19,6 +21,12 @@ from config import GEO_MAP
 from .base import TrendsProvider, TrendsSeries
 
 API_URL = "https://api.dataforseo.com/v3/keywords_data/google_trends/explore/live"
+
+# codici task DataForSEO: 20000 = ok, 40102 = nessun risultato (serie vuota,
+# non un errore). Tutto il resto (crediti finiti, rate limit, ...) va segnalato
+# invece di passare per "Google Trends non ha dati".
+_TASK_OK = {20000, 40102}
+_RETRY_HTTP = {429, 500, 502, 503, 504}
 
 
 class DataForSEOProvider(TrendsProvider):
@@ -39,6 +47,31 @@ class DataForSEOProvider(TrendsProvider):
             "Authorization": f"Basic {token}",
             "Content-Type": "application/json",
         }
+        # una Session per thread: riusa la connessione TLS tra le chiamate
+        # (le analisi girano in parallelo, e Session non e' thread-safe)
+        self._local = threading.local()
+
+    def _session(self) -> requests.Session:
+        sess = getattr(self._local, "session", None)
+        if sess is None:
+            sess = self._local.session = requests.Session()
+            sess.headers.update(self._headers)
+        return sess
+
+    def _post(self, payload, attempts: int = 3) -> dict:
+        """POST con retry su errori di rete e 429/5xx (backoff 2s, 4s)."""
+        for i in range(attempts):
+            try:
+                resp = self._session().post(API_URL, json=payload, timeout=self.timeout)
+                if resp.status_code in _RETRY_HTTP and i < attempts - 1:
+                    time.sleep(2 ** (i + 1)); continue
+                resp.raise_for_status()
+                return resp.json()
+            except (requests.ConnectionError, requests.Timeout):
+                if i == attempts - 1:
+                    raise
+                time.sleep(2 ** (i + 1))
+        raise RuntimeError("DataForSEO non raggiungibile")
 
     # -- API ---------------------------------------------------------------
     def fetch_series(self, keyword: str, geo: str = "IT", years: int = 5,
@@ -58,10 +91,11 @@ class DataForSEOProvider(TrendsProvider):
             "item_types": ["google_trends_graph", "google_trends_queries_list"],
         }]
 
-        resp = requests.post(API_URL, json=payload, headers=self._headers,
-                             timeout=self.timeout)
-        resp.raise_for_status()
-        data = resp.json()
+        data = self._post(payload)
+        task = (data.get("tasks") or [{}])[0]
+        code = task.get("status_code")
+        if code is not None and code not in _TASK_OK:
+            raise RuntimeError(f"DataForSEO {code}: {task.get('status_message', '')}")
         return self._parse(keyword, geo, data)
 
     # -- Parsing (difensivo) ----------------------------------------------

@@ -36,9 +36,11 @@ streamlit run app.py
 ### Modello AI
 
 La scelta della sorgente Trends (Topic vs query di ricerca) la fa un LLM,
-selezionabile al volo dalla sidebar (**🤖 AI**) fra ChatGPT, Gemini Flash e
-Claude Sonnet. Serve solo la key del provider che usi; senza key si ricade
-sulle regole euristiche di `resolver.py`. Preselezione via `LLM_PROVIDER`.
+selezionabile al volo dalla sidebar (**🤖 AI**) fra ChatGPT, Gemini, Claude e
+Grok, con il modello da usare (il primo dell'elenco è il più recente: GPT-6
+Astra, Gemini 3.8 Flash, Claude Fable 5.1, Grok 4.6). Serve solo la key del
+provider che usi; senza key si ricade sulle regole euristiche di
+`resolver.py`. Preselezione via `LLM_PROVIDER` e `*_MODEL`.
 
 ## Aggiornamento dei dati
 
@@ -91,7 +93,7 @@ in v1 lavoriamo su search term nel mercato scelto.
 |------|-------|
 | `app.py` | UI Streamlit (4 tab) + sidebar di comando |
 | `dashboard.html` | frontend embeddato (grafici SVG, calendario editoriale) |
-| `llm_selector.py` | scelta della sorgente Trends via LLM (ChatGPT/Gemini/Claude) |
+| `llm_selector.py` | scelta della sorgente Trends via LLM (ChatGPT/Gemini/Claude/Grok) |
 | `analysis.py` | orchestratore: candidati → LLM → DataForSEO → stagionalità |
 | `sync_monthly.py` | aggiornamento da cron, senza interfaccia |
 | `seasonality.py` | cuore deterministico: profilo mensile, salita/picco/pubblicazione |

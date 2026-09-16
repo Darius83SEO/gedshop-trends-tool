@@ -163,6 +163,6 @@ def resolve(query: str, hl: str = "it") -> Decision:
     try:
         cands = autocomplete(query, hl=hl)
     except Exception as e:
-        return Decision(mode="term", confidence="alta", candidates=[],
+        return Decision(mode="term", state="auto", confidence="alta", candidates=[],
                         note=f"Risoluzione Topic non riuscita ({e}): uso la query di ricerca.")
     return decide(query, cands)

@@ -30,7 +30,30 @@
   .subttl { font-size: .72rem; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); margin: 0 0 14px; font-weight: 600; }
 
   .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
-  select.picker { font-family: var(--font); font-size: .98rem; font-weight: 600; padding: 10px 14px; border-radius: 11px; border: 1px solid var(--border); background: var(--surface); color: var(--text); min-width: 250px; cursor: pointer; box-shadow: var(--shadow); }
+  /* Colonna categorie: nomi interi, uno sotto l'altro, comprimibile. */
+  .catlayout { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 18px; align-items: start; }
+  .catlayout.collapsed { grid-template-columns: 46px minmax(0, 1fr); }
+  .catcol { position: sticky; top: 6px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+  .catcol-head { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 13px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+  .catcol-head .t { flex: 1; font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 700; }
+  .colbtn { flex: none; width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; font-size: .95rem; line-height: 1; }
+  .colbtn:hover { border-color: var(--primary); }
+  .catsearch { display: block; width: calc(100% - 20px); margin: 10px 10px 2px; padding: 8px 11px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font-family: var(--font); font-size: .86rem; }
+  .catlist { list-style: none; margin: 0; padding: 6px; max-height: 1180px; overflow-y: auto; }
+  .catitem { display: block; width: 100%; text-align: left; border: 0; background: transparent; color: var(--text); padding: 8px 10px; border-radius: 9px; cursor: pointer; font-family: var(--font); }
+  .catitem:hover { background: var(--surface-2); }
+  .catitem[aria-current="true"] { background: color-mix(in srgb, var(--primary) 17%, transparent); box-shadow: inset 3px 0 0 var(--primary); }
+  .catitem .nm { display: block; font-weight: 600; font-size: .92rem; line-height: 1.3; overflow-wrap: anywhere; }
+  .catitem .mt { display: block; margin-top: 2px; font-size: .74rem; color: var(--muted); }
+  .catlayout.collapsed .catcol-head { padding: 8px; }
+  .catlayout.collapsed .catcol-head .t, .catlayout.collapsed .catsearch, .catlayout.collapsed .catlist { display: none; }
+  @media (max-width: 760px) {
+    .catlayout, .catlayout.collapsed { grid-template-columns: minmax(0, 1fr); }
+    .catcol { position: static; } .catlist { max-height: 280px; }
+    .catlayout.collapsed .catcol-head .t { display: block; }
+  }
+  td.cn { white-space: normal; min-width: 150px; font-weight: 600; }
+  #listTable tbody tr { cursor: pointer; }
   .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; box-shadow: var(--shadow); }
   .seg button { border: none; background: var(--surface); color: var(--muted); padding: 9px 15px; font-family: var(--font); font-weight: 600; font-size: .88rem; cursor: pointer; }
   .seg button[aria-pressed="true"] { background: var(--primary); color: #fff; }
@@ -57,8 +80,9 @@
   .tip b { font-size: .92rem; } .tip .td { opacity: .7; font-size: .72rem; }
   .hit { fill: transparent; cursor: crosshair; }
 
-  .grid2 { display: grid; grid-template-columns: 1.3fr 1fr; gap: 20px; margin-top: 20px; }
-  @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+  /* profilo e query uno sotto l'altro: con la colonna categorie affiancata
+     lo spazio non basta per le tre colonne di query */
+  .grid2 { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; margin-top: 20px; }
 
   .bars { display: flex; align-items: flex-end; gap: 6px; height: 150px; border-bottom: 1px solid var(--border); }
   .bcol { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; }
@@ -156,8 +180,17 @@
   </div>
 
   <section class="panel active" id="tab-cat">
-    <div class="toolbar"><select class="picker" id="catSel"></select><div class="seg" id="segSource"></div><div class="seg" id="segRange"></div></div>
-    <div id="catDetail"></div>
+    <div class="catlayout" id="catLayout">
+      <aside class="catcol" aria-label="Elenco categorie">
+        <div class="catcol-head"><span class="t" id="catCount">Categorie</span><button class="colbtn" id="colBtn" type="button" aria-expanded="true" title="Comprimi l'elenco">⟨</button></div>
+        <input class="catsearch" id="catSearch" type="search" placeholder="Cerca categoria…" aria-label="Cerca categoria">
+        <ul class="catlist" id="catList"></ul>
+      </aside>
+      <div>
+        <div class="toolbar"><div class="seg" id="segSource"></div><div class="seg" id="segRange"></div></div>
+        <div id="catDetail"></div>
+      </div>
+    </div>
   </section>
   <section class="panel" id="tab-cal">
     <div class="nowbox" id="calNow"></div>
@@ -296,14 +329,59 @@ function qlist(items) {
   return items.slice(0, 7).map(q => `<div class="q">${q}</div>`).join('');
 }
 
-const sel = document.getElementById('catSel');
-cats.forEach(c => { const o = document.createElement('option'); o.value = c.name; o.textContent = c.name; sel.appendChild(o); });
-sel.addEventListener('change', () => renderCat(sel.value));
+/* --- colonna categorie --- */
+const esc = s => String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
+// localStorage puo' mancare o lanciare (anteprime, dati del sito bloccati): solo comodita'
+const pref = {
+  get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+};
+const FOCUS = __FOCUS__;
+const layout = document.getElementById('catLayout'), catList = document.getElementById('catList');
+const catSearch = document.getElementById('catSearch'), colBtn = document.getElementById('colBtn');
+let current = null;
+function catMeta(name) {
+  const v = activeView(name);
+  if (!v) return 'nessun dato';
+  return v.seasonal ? `pubblica ${MESI[v.pub - 1]} · picco ${MESI[v.peak - 1]}` : 'poco stagionale';
+}
+function renderCatList() {
+  const q = catSearch.value.trim().toLowerCase();
+  const items = cats.filter(c => !q || c.name.toLowerCase().includes(q));
+  document.getElementById('catCount').textContent = `Categorie · ${cats.length}`;
+  catList.innerHTML = items.length ? items.map(c => `<li><button type="button" class="catitem" data-n="${esc(c.name)}" aria-current="${c.name === current}">
+      <span class="nm">${esc(c.name)}${c.needs_review ? ' <span class="review-flag" title="sorgente da validare">⚠</span>' : ''}</span>
+      <span class="mt">${catMeta(c.name)}</span></button></li>`).join('')
+    : '<li class="mt" style="padding:10px;color:var(--muted);font-size:.84rem">Nessuna categoria trovata.</li>';
+  catList.querySelectorAll('.catitem').forEach(b => b.addEventListener('click', () => selectCat(b.dataset.n)));
+}
+function selectCat(name) {
+  current = name; pref.set('gt_cat', name);
+  renderCatList(); renderCat(name);
+}
+function setCollapsed(on) {
+  layout.classList.toggle('collapsed', on);
+  colBtn.textContent = on ? '☰' : '⟨';
+  colBtn.title = on ? "Mostra l'elenco delle categorie" : "Comprimi l'elenco";
+  colBtn.setAttribute('aria-expanded', String(!on));
+  pref.set('gt_col', on ? '1' : '0');
+}
+colBtn.addEventListener('click', () => setCollapsed(!layout.classList.contains('collapsed')));
+catSearch.addEventListener('input', renderCatList);
+catSearch.addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  const first = catList.querySelector('.catitem'); if (first) selectCat(first.dataset.n);
+});
+
 function renderSeg(name) {
   const c = DATA[name], seg = document.getElementById('segSource');
   seg.innerHTML = `<button data-m="term" aria-pressed="${chosen[name] === 'term'}">🔤 Query di ricerca</button>
                    <button data-m="topic" aria-pressed="${chosen[name] === 'topic'}" ${c.topic ? '' : 'disabled'}>🎯 Topic${c.topic ? '' : ' n/d'}</button>`;
-  seg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { if (b.disabled) return; chosen[name] = b.dataset.m; renderCat(name); }));
+  // cambiare sorgente cambia anche mesi di calendario, tabella e riepilogo in colonna
+  seg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+    if (b.disabled) return; chosen[name] = b.dataset.m;
+    renderCatList(); renderCat(name); renderConf(); renderCal(); renderList();
+  }));
   const rg = document.getElementById('segRange');
   rg.innerHTML = RANGES.map(r => `<button data-r="${r.k}" aria-pressed="${range === r.k}">${r.lab}</button>`).join('');
   rg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { range = b.dataset.r; renderCat(name); }));
@@ -435,7 +513,9 @@ function renderList() {
     const isTopic = chosen[c.name] === 'topic' && c.topic;
     const src = isTopic ? `<span class="modepill mp-topic">🎯 ${c.topic.title}</span>` : `<span class="modepill mp-term">🔤 ${c.query_term}</span>`;
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${c.name}</td><td>${src}</td><td>${sparkline(v.series)}</td>
+    tr.title = 'Apri la scheda di ' + c.name;
+    tr.addEventListener('click', () => { document.querySelector('.tab[data-tab="cat"]').click(); selectCat(c.name); window.scrollTo(0, 0); });
+    tr.innerHTML = `<td class="cn">${esc(c.name)}</td><td>${src}</td><td>${sparkline(v.series)}</td>
       <td>${v.seasonal ? cap(MESI[v.rise - 1]) : '—'}</td><td>${v.seasonal ? cap(MESI[v.peak - 1]) : '—'}</td>
       <td>${v.seasonal ? '<b>' + cap(MESI[v.pub - 1]) + '</b>' : '—'}</td>
       <td class="num"><span class="fbar"><i style="width:${(v.strength * 100).toFixed(0)}%"></i></span>${(v.strength * 100).toFixed(0)}%</td>`;
@@ -443,6 +523,12 @@ function renderList() {
   });
 }
 
-if (cats.length) { renderCat(cats[0].name); renderConf(); renderCal(); renderList(); }
+if (cats.length) {
+  // categoria iniziale: quella appena aggiunta/ricalcolata, poi l'ultima aperta
+  const saved = pref.get('gt_cat');
+  const start = (FOCUS && DATA[FOCUS]) ? FOCUS : (saved && DATA[saved]) ? saved : cats[0].name;
+  setCollapsed(pref.get('gt_col') === '1');
+  selectCat(start); renderConf(); renderCal(); renderList();
+}
 else { document.querySelector('.wrap').innerHTML = '<div class="empty">Nessuna categoria analizzata. Usa la sidebar: Preset o Crawl, poi Analizza.</div>'; }
 </script>

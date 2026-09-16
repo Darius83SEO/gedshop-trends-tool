@@ -6,7 +6,7 @@ DOMANDA reale del prodotto, scartando i significati fuori tema (es. 'penne'=past
 'shopper'=catena di farmacie, 'agende'=identita' di genere). Non fa conti e non
 scarica dati: legge solo titolo+tipo. Una chiamata piccola per categoria.
 
-Il modello e' intercambiabile (ChatGPT / Gemini Flash / Claude Sonnet): si sceglie
+Il modello e' intercambiabile (ChatGPT / Gemini / Claude / Grok): si sceglie
 dalla sidebar, il prompt e la logica di parsing restano identici per tutti.
 
 Fallback: se non c'e' la key o l'LLM fallisce, si usa la regola euristica di
@@ -71,16 +71,30 @@ def _extract_json(text: str) -> dict:
         return json.loads(m.group(0))
 
 
+# famiglie OpenAI "reasoning": rifiutano temperature != 1, accettano reasoning_effort
+_OPENAI_REASONING = ("gpt-5", "gpt-6", "o1", "o3", "o4")
+
+
 def _ask_openai(conf: dict, prompt: str) -> str:
-    from openai import OpenAI
-    client = OpenAI(api_key=conf["key"], timeout=_TIMEOUT_S, max_retries=1)
-    resp = client.chat.completions.create(
-        model=conf["model"],
-        messages=[{"role": "system", "content": _SYSTEM},
-                  {"role": "user", "content": prompt}],
-        temperature=0,
-        response_format={"type": "json_object"},
-    )
+    """ChatGPT e Grok (API compatibile OpenAI, cambia solo base_url)."""
+    from openai import BadRequestError, OpenAI
+    client = OpenAI(api_key=conf["key"], base_url=conf.get("base_url"),
+                    timeout=_TIMEOUT_S, max_retries=1)
+    base = dict(model=conf["model"],
+                messages=[{"role": "system", "content": _SYSTEM},
+                          {"role": "user", "content": prompt}])
+    extra = {"response_format": {"type": "json_object"}}
+    if conf["model"].startswith(_OPENAI_REASONING):
+        # compito di sola classificazione: ragionamento minimo, meno costo e attesa
+        extra["reasoning_effort"] = "low"
+    elif conf.get("name") != "xai":
+        extra["temperature"] = 0
+    try:
+        resp = client.chat.completions.create(**base, **extra)
+    except BadRequestError:
+        # parametro non supportato da questo modello: il JSON e' gia' chiesto
+        # nel prompt, _extract_json fa il resto
+        resp = client.chat.completions.create(**base)
     return resp.choices[0].message.content
 
 
@@ -89,6 +103,12 @@ def _ask_gemini(conf: dict, prompt: str) -> str:
     from google.genai import types
     client = genai.Client(api_key=conf["key"],
                           http_options=types.HttpOptions(timeout=int(_TIMEOUT_S * 1000)))
+    # compito di sola classificazione: ragionamento al minimo. Gemini 2.x lo
+    # spegne con thinking_budget=0, i Gemini 3.x usano thinking_level.
+    if conf["model"].startswith("gemini-2"):
+        thinking = types.ThinkingConfig(thinking_budget=0)
+    else:
+        thinking = types.ThinkingConfig(thinking_level="low")
     resp = client.models.generate_content(
         model=conf["model"],
         contents=prompt,
@@ -96,8 +116,7 @@ def _ask_gemini(conf: dict, prompt: str) -> str:
             system_instruction=_SYSTEM,
             temperature=0,
             response_mime_type="application/json",
-            # compito di sola classificazione: niente ragionamento, meno costo
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
+            thinking_config=thinking,
         ),
     )
     return resp.text
@@ -106,7 +125,7 @@ def _ask_gemini(conf: dict, prompt: str) -> str:
 def _ask_anthropic(conf: dict, prompt: str) -> str:
     import anthropic
     client = anthropic.Anthropic(api_key=conf["key"], timeout=_TIMEOUT_S, max_retries=1)
-    # niente temperature: i modelli Sonnet 5 / 4.6 la rifiutano (400)
+    # niente temperature: Sonnet 5 / Opus 5 / Fable 5.1 la rifiutano (400)
     kwargs = dict(model=conf["model"], max_tokens=4096, system=_SYSTEM,
                   messages=[{"role": "user", "content": prompt}])
     try:
@@ -114,18 +133,21 @@ def _ask_anthropic(conf: dict, prompt: str) -> str:
             output_config={"effort": "low",
                            "format": {"type": "json_schema", "schema": _SCHEMA}},
             **kwargs)
-    except Exception:
+    except anthropic.BadRequestError:
         # SDK vecchio o modello senza structured outputs: il JSON e' gia'
         # richiesto nel prompt, _extract_json fa il resto.
         resp = client.messages.create(**kwargs)
+    if resp.stop_reason == "refusal":
+        raise RuntimeError("richiesta rifiutata dal modello")
     return next((b.text for b in resp.content if b.type == "text"), "")
 
 
-_ASK = {"openai": _ask_openai, "gemini": _ask_gemini, "anthropic": _ask_anthropic}
+_ASK = {"openai": _ask_openai, "xai": _ask_openai,
+        "gemini": _ask_gemini, "anthropic": _ask_anthropic}
 
 
-def _ask_llm(prompt: str) -> str:
-    return _ASK[config.get_llm_provider()](config.llm_conf(), prompt)
+def _ask_llm(prompt: str, conf: dict) -> str:
+    return _ASK[conf["name"]](conf, prompt)
 
 
 def _build_prompt(query_term, category_name, candidates):
@@ -177,7 +199,10 @@ def _resolve_choice(idx: int, title: str, candidates: list) -> int:
 
 
 def choose_source(query_term: str, category_name: str,
-                  candidates: list | None = None) -> SourceChoice:
+                  candidates: list | None = None, llm: dict | None = None) -> SourceChoice:
+    """`llm` = config.llm_conf() letta nel thread principale (serve quando la
+    funzione gira in un thread di lavoro, dove session_state non c'e')."""
+    llm = llm or config.llm_conf()
     if candidates is None:
         try:
             candidates = resolver.autocomplete(query_term)
@@ -186,12 +211,12 @@ def choose_source(query_term: str, category_name: str,
     candidates = candidates[:6]
 
     # senza key o senza candidati -> euristica
-    if not config.has_llm() or not candidates:
+    if not config.has_llm(llm) or not candidates:
         return _heuristic(query_term, candidates)
 
     try:
         prompt = _build_prompt(query_term, category_name, candidates)
-        data = _extract_json(_ask_llm(prompt))
+        data = _extract_json(_ask_llm(prompt, llm))
         idx = _resolve_choice(int(data.get("choice", 0)),
                               str(data.get("choice_title", "")), candidates)
         reason = str(data.get("reason", "")).strip()
@@ -205,7 +230,7 @@ def choose_source(query_term: str, category_name: str,
         alt = candidates[alt_i - 1] if 0 < alt_i <= len(candidates) and alt_i != idx else None
     except Exception as e:
         fb = _heuristic(query_term, candidates)
-        fb.reason = f"{config.llm_label()} non disponibile ({e}); {fb.reason}"
+        fb.reason = f"{config.llm_label(llm)} non disponibile ({e}); {fb.reason}"
         return fb
 
     # va rivisto da un umano se l'LLM non e' sicuro, oppure se la stringa e'
